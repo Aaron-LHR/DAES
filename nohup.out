@@ -1,0 +1,224 @@
+2022-12-12 22:45:11.592926: I tensorflow/core/util/util.cc:169] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2022-12-12 22:45:11.592930: I tensorflow/core/util/util.cc:169] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2022-12-12 22:45:11.593078: I tensorflow/core/util/util.cc:169] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2022-12-12 22:45:11.593080: I tensorflow/core/util/util.cc:169] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2022-12-12 22:45:11.597324: W tensorflow/stream_executor/platform/default/dso_loader.cc:64] Could not load dynamic library 'libcudart.so.11.0'; dlerror: libcudart.so.11.0: cannot open shared object file: No such file or directory; LD_LIBRARY_PATH: /home/hadoop/software/hadoop/lib/native:/home/software/hadoop-2.6.0U32.8-cdh5.10.0/lib/native:/home/hadoop/software/java//jre/lib/amd64/server
+2022-12-12 22:45:11.597329: W tensorflow/stream_executor/platform/default/dso_loader.cc:64] Could not load dynamic library 'libcudart.so.11.0'; dlerror: libcudart.so.11.0: cannot open shared object file: No such file or directory; LD_LIBRARY_PATH: /home/hadoop/software/hadoop/lib/native:/home/software/hadoop-2.6.0U32.8-cdh5.10.0/lib/native:/home/hadoop/software/java//jre/lib/amd64/server
+2022-12-12 22:45:11.597351: I tensorflow/stream_executor/cuda/cudart_stub.cc:29] Ignore above cudart dlerror if you do not have a GPU set up on your machine.
+2022-12-12 22:45:11.597357: I tensorflow/stream_executor/cuda/cudart_stub.cc:29] Ignore above cudart dlerror if you do not have a GPU set up on your machine.
+2022-12-12 22:45:11.597619: W tensorflow/stream_executor/platform/default/dso_loader.cc:64] Could not load dynamic library 'libcudart.so.11.0'; dlerror: libcudart.so.11.0: cannot open shared object file: No such file or directory; LD_LIBRARY_PATH: /home/hadoop/software/hadoop/lib/native:/home/software/hadoop-2.6.0U32.8-cdh5.10.0/lib/native:/home/hadoop/software/java//jre/lib/amd64/server
+2022-12-12 22:45:11.597622: W tensorflow/stream_executor/platform/default/dso_loader.cc:64] Could not load dynamic library 'libcudart.so.11.0'; dlerror: libcudart.so.11.0: cannot open shared object file: No such file or directory; LD_LIBRARY_PATH: /home/hadoop/software/hadoop/lib/native:/home/software/hadoop-2.6.0U32.8-cdh5.10.0/lib/native:/home/hadoop/software/java//jre/lib/amd64/server
+2022-12-12 22:45:11.597651: I tensorflow/stream_executor/cuda/cudart_stub.cc:29] Ignore above cudart dlerror if you do not have a GPU set up on your machine.
+2022-12-12 22:45:11.597658: I tensorflow/stream_executor/cuda/cudart_stub.cc:29] Ignore above cudart dlerror if you do not have a GPU set up on your machine.
+2022-12-12 22:45:11.603062: I tensorflow/core/util/util.cc:169] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2022-12-12 22:45:11.607287: W tensorflow/stream_executor/platform/default/dso_loader.cc:64] Could not load dynamic library 'libcudart.so.11.0'; dlerror: libcudart.so.11.0: cannot open shared object file: No such file or directory; LD_LIBRARY_PATH: /home/hadoop/software/hadoop/lib/native:/home/software/hadoop-2.6.0U32.8-cdh5.10.0/lib/native:/home/hadoop/software/java//jre/lib/amd64/server
+2022-12-12 22:45:11.607317: I tensorflow/stream_executor/cuda/cudart_stub.cc:29] Ignore above cudart dlerror if you do not have a GPU set up on your machine.
+2022-12-12 22:45:11.620004: I tensorflow/core/util/util.cc:169] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2022-12-12 22:45:11.622832: I tensorflow/core/util/util.cc:169] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2022-12-12 22:45:11.624180: W tensorflow/stream_executor/platform/default/dso_loader.cc:64] Could not load dynamic library 'libcudart.so.11.0'; dlerror: libcudart.so.11.0: cannot open shared object file: No such file or directory; LD_LIBRARY_PATH: /home/hadoop/software/hadoop/lib/native:/home/software/hadoop-2.6.0U32.8-cdh5.10.0/lib/native:/home/hadoop/software/java//jre/lib/amd64/server
+2022-12-12 22:45:11.624209: I tensorflow/stream_executor/cuda/cudart_stub.cc:29] Ignore above cudart dlerror if you do not have a GPU set up on your machine.
+2022-12-12 22:45:11.626924: W tensorflow/stream_executor/platform/default/dso_loader.cc:64] Could not load dynamic library 'libcudart.so.11.0'; dlerror: libcudart.so.11.0: cannot open shared object file: No such file or directory; LD_LIBRARY_PATH: /home/hadoop/software/hadoop/lib/native:/home/software/hadoop-2.6.0U32.8-cdh5.10.0/lib/native:/home/hadoop/software/java//jre/lib/amd64/server
+2022-12-12 22:45:11.626951: I tensorflow/stream_executor/cuda/cudart_stub.cc:29] Ignore above cudart dlerror if you do not have a GPU set up on your machine.
+2022-12-12 22:45:11.702688: I tensorflow/core/util/util.cc:169] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2022-12-12 22:45:11.707290: W tensorflow/stream_executor/platform/default/dso_loader.cc:64] Could not load dynamic library 'libcudart.so.11.0'; dlerror: libcudart.so.11.0: cannot open shared object file: No such file or directory; LD_LIBRARY_PATH: /home/hadoop/software/hadoop/lib/native:/home/software/hadoop-2.6.0U32.8-cdh5.10.0/lib/native:/home/hadoop/software/java//jre/lib/amd64/server
+2022-12-12 22:45:11.707331: I tensorflow/stream_executor/cuda/cudart_stub.cc:29] Ignore above cudart dlerror if you do not have a GPU set up on your machine.
+================
+device: cuda:0
+Some weights of the model checkpoint at bert-base-uncased were not used when initializing BertModel: ['cls.seq_relationship.weight', 'cls.predictions.transform.dense.bias', 'cls.predictions.bias', 'cls.predictions.transform.LayerNorm.bias', 'cls.seq_relationship.bias', 'cls.predictions.decoder.weight', 'cls.predictions.transform.LayerNorm.weight', 'cls.predictions.transform.dense.weight']
+- This IS expected if you are initializing BertModel from the checkpoint of a model trained on another task or with another architecture (e.g. initializing a BertForSequenceClassification model from a BertForPreTraining model).
+- This IS NOT expected if you are initializing BertModel from the checkpoint of a model that you expect to be exactly identical (initializing a BertForSequenceClassification model from a BertForSequenceClassification model).
+Some weights of the model checkpoint at bert-base-uncased were not used when initializing BertModel: ['cls.seq_relationship.bias', 'cls.predictions.transform.LayerNorm.bias', 'cls.predictions.bias', 'cls.predictions.decoder.weight', 'cls.seq_relationship.weight', 'cls.predictions.transform.LayerNorm.weight', 'cls.predictions.transform.dense.bias', 'cls.predictions.transform.dense.weight']
+- This IS expected if you are initializing BertModel from the checkpoint of a model trained on another task or with another architecture (e.g. initializing a BertForSequenceClassification model from a BertForPreTraining model).
+- This IS NOT expected if you are initializing BertModel from the checkpoint of a model that you expect to be exactly identical (initializing a BertForSequenceClassification model from a BertForSequenceClassification model).
+Some weights of the model checkpoint at bert-base-uncased were not used when initializing BertModel: ['cls.seq_relationship.bias', 'cls.predictions.transform.LayerNorm.bias', 'cls.predictions.decoder.weight', 'cls.predictions.transform.dense.weight', 'cls.predictions.bias', 'cls.predictions.transform.dense.bias', 'cls.seq_relationship.weight', 'cls.predictions.transform.LayerNorm.weight']
+- This IS expected if you are initializing BertModel from the checkpoint of a model trained on another task or with another architecture (e.g. initializing a BertForSequenceClassification model from a BertForPreTraining model).
+- This IS NOT expected if you are initializing BertModel from the checkpoint of a model that you expect to be exactly identical (initializing a BertForSequenceClassification model from a BertForSequenceClassification model).
+Some weights of the model checkpoint at bert-base-uncased were not used when initializing BertModel: ['cls.predictions.bias', 'cls.predictions.transform.LayerNorm.bias', 'cls.predictions.transform.dense.bias', 'cls.seq_relationship.weight', 'cls.seq_relationship.bias', 'cls.predictions.decoder.weight', 'cls.predictions.transform.LayerNorm.weight', 'cls.predictions.transform.dense.weight']
+- This IS expected if you are initializing BertModel from the checkpoint of a model trained on another task or with another architecture (e.g. initializing a BertForSequenceClassification model from a BertForPreTraining model).
+- This IS NOT expected if you are initializing BertModel from the checkpoint of a model that you expect to be exactly identical (initializing a BertForSequenceClassification model from a BertForSequenceClassification model).
+Some weights of the model checkpoint at bert-base-uncased were not used when initializing BertModel: ['cls.predictions.transform.LayerNorm.bias', 'cls.predictions.bias', 'cls.predictions.decoder.weight', 'cls.seq_relationship.weight', 'cls.predictions.transform.dense.weight', 'cls.predictions.transform.dense.bias', 'cls.predictions.transform.LayerNorm.weight', 'cls.seq_relationship.bias']
+- This IS expected if you are initializing BertModel from the checkpoint of a model trained on another task or with another architecture (e.g. initializing a BertForSequenceClassification model from a BertForPreTraining model).
+- This IS NOT expected if you are initializing BertModel from the checkpoint of a model that you expect to be exactly identical (initializing a BertForSequenceClassification model from a BertForSequenceClassification model).
+Some weights of the model checkpoint at bert-base-uncased were not used when initializing BertModel: ['cls.predictions.transform.LayerNorm.weight', 'cls.predictions.transform.dense.weight', 'cls.seq_relationship.bias', 'cls.predictions.decoder.weight', 'cls.predictions.bias', 'cls.predictions.transform.dense.bias', 'cls.seq_relationship.weight', 'cls.predictions.transform.LayerNorm.bias']
+- This IS expected if you are initializing BertModel from the checkpoint of a model trained on another task or with another architecture (e.g. initializing a BertForSequenceClassification model from a BertForPreTraining model).
+- This IS NOT expected if you are initializing BertModel from the checkpoint of a model that you expect to be exactly identical (initializing a BertForSequenceClassification model from a BertForSequenceClassification model).
+Some weights of the model checkpoint at bert-base-uncased were not used when initializing BertModel: ['cls.predictions.transform.LayerNorm.bias', 'cls.seq_relationship.weight', 'cls.predictions.bias', 'cls.predictions.decoder.weight', 'cls.predictions.transform.dense.weight', 'cls.seq_relationship.bias', 'cls.predictions.transform.LayerNorm.weight', 'cls.predictions.transform.dense.bias']
+- This IS expected if you are initializing BertModel from the checkpoint of a model trained on another task or with another architecture (e.g. initializing a BertForSequenceClassification model from a BertForPreTraining model).
+- This IS NOT expected if you are initializing BertModel from the checkpoint of a model that you expect to be exactly identical (initializing a BertForSequenceClassification model from a BertForSequenceClassification model).
+Some weights of the model checkpoint at bert-base-uncased were not used when initializing BertModel: ['cls.predictions.transform.dense.weight', 'cls.predictions.transform.dense.bias', 'cls.seq_relationship.bias', 'cls.predictions.transform.LayerNorm.weight', 'cls.predictions.bias', 'cls.predictions.transform.LayerNorm.bias', 'cls.predictions.decoder.weight', 'cls.seq_relationship.weight']
+- This IS expected if you are initializing BertModel from the checkpoint of a model trained on another task or with another architecture (e.g. initializing a BertForSequenceClassification model from a BertForPreTraining model).
+- This IS NOT expected if you are initializing BertModel from the checkpoint of a model that you expect to be exactly identical (initializing a BertForSequenceClassification model from a BertForSequenceClassification model).
+  0%|          | 0/10 [00:00<?, ?it/s]
+  0%|          | 0/997 [00:00<?, ?it/s][A
+  0%|          | 1/997 [00:01<27:49,  1.68s/it][A
+  0%|          | 2/997 [00:03<24:37,  1.49s/it][A
+  0%|          | 3/997 [00:04<23:07,  1.40s/it][A
+  0%|          | 4/997 [00:05<22:24,  1.35s/it][A
+  1%|          | 5/997 [00:06<21:59,  1.33s/it][A
+  1%|          | 6/997 [00:08<21:45,  1.32s/it][A
+  1%|          | 7/997 [00:09<21:36,  1.31s/it][A
+  1%|          | 8/997 [00:10<21:31,  1.31s/it][A
+  1%|          | 9/997 [00:12<21:27,  1.30s/it][A
+  1%|          | 10/997 [00:13<21:24,  1.30s/it][A
+  1%|          | 11/997 [00:14<21:23,  1.30s/it][A
+  1%|          | 12/997 [00:15<21:22,  1.30s/it][A
+  1%|▏         | 13/997 [00:17<21:21,  1.30s/it][A
+  1%|▏         | 14/997 [00:18<21:18,  1.30s/it][A
+  2%|▏         | 15/997 [00:19<21:16,  1.30s/it][A
+  2%|▏         | 16/997 [00:21<21:14,  1.30s/it][A
+  2%|▏         | 17/997 [00:22<21:12,  1.30s/it][A
+  2%|▏         | 18/997 [00:23<21:12,  1.30s/it][A
+  2%|▏         | 19/997 [00:25<21:12,  1.30s/it][A
+  2%|▏         | 20/997 [00:26<21:10,  1.30s/it][A
+  2%|▏         | 21/997 [00:27<21:09,  1.30s/it][A
+  2%|▏         | 22/997 [00:28<21:09,  1.30s/it][A
+  2%|▏         | 23/997 [00:30<21:08,  1.30s/it][A
+  2%|▏         | 24/997 [00:31<21:06,  1.30s/it][A
+  3%|▎         | 25/997 [00:32<21:04,  1.30s/it][A
+  3%|▎         | 26/997 [00:34<21:03,  1.30s/it][A
+  3%|▎         | 27/997 [00:35<21:01,  1.30s/it][A
+  3%|▎         | 28/997 [00:36<21:01,  1.30s/it][A
+  3%|▎         | 29/997 [00:38<21:01,  1.30s/it][A
+  3%|▎         | 30/997 [00:39<21:00,  1.30s/it][A
+  3%|▎         | 31/997 [00:40<20:59,  1.30s/it][A
+  3%|▎         | 32/997 [00:42<20:58,  1.30s/it][A
+  3%|▎         | 33/997 [00:43<20:57,  1.30s/it][A
+  3%|▎         | 34/997 [00:44<20:56,  1.30s/it][A
+  4%|▎         | 35/997 [00:45<20:54,  1.30s/it][A
+  4%|▎         | 36/997 [00:47<20:53,  1.30s/it][A
+  4%|▎         | 37/997 [00:48<20:52,  1.30s/it][A
+  4%|▍         | 38/997 [00:49<20:52,  1.31s/it][A
+  4%|▍         | 39/997 [00:51<20:51,  1.31s/it][A
+  4%|▍         | 40/997 [00:52<20:50,  1.31s/it][A
+  4%|▍         | 41/997 [00:53<20:48,  1.31s/it][A
+  4%|▍         | 42/997 [00:55<20:47,  1.31s/it][A
+  4%|▍         | 43/997 [00:56<20:45,  1.31s/it][A
+  4%|▍         | 44/997 [00:57<20:43,  1.30s/it][A
+  5%|▍         | 45/997 [00:58<20:42,  1.31s/it][A
+  5%|▍         | 46/997 [01:00<20:41,  1.31s/it][A
+  5%|▍         | 47/997 [01:01<20:39,  1.30s/it][A
+  5%|▍         | 48/997 [01:02<20:38,  1.30s/it][A
+  5%|▍         | 49/997 [01:04<20:37,  1.31s/it][A
+  5%|▌         | 50/997 [01:05<20:36,  1.31s/it][A
+  5%|▌         | 51/997 [01:06<20:35,  1.31s/it][A
+  5%|▌         | 52/997 [01:08<20:33,  1.31s/it][A
+  5%|▌         | 53/997 [01:09<20:32,  1.31s/it][A
+  5%|▌         | 54/997 [01:10<20:31,  1.31s/it][A
+  6%|▌         | 55/997 [01:12<20:30,  1.31s/it][A
+  6%|▌         | 56/997 [01:13<20:31,  1.31s/it][A
+  6%|▌         | 57/997 [01:14<20:31,  1.31s/it][A
+  6%|▌         | 58/997 [01:15<20:32,  1.31s/it][A
+  6%|▌         | 59/997 [01:17<20:31,  1.31s/it][A
+  6%|▌         | 60/997 [01:18<20:30,  1.31s/it][A
+  6%|▌         | 61/997 [01:19<20:26,  1.31s/it][A
+  6%|▌         | 62/997 [01:21<20:21,  1.31s/it][A
+  6%|▋         | 63/997 [01:22<20:16,  1.30s/it][A
+  6%|▋         | 64/997 [01:23<20:14,  1.30s/it][A
+  7%|▋         | 65/997 [01:25<20:10,  1.30s/it][A
+  7%|▋         | 66/997 [01:26<20:08,  1.30s/it][A
+  7%|▋         | 67/997 [01:27<20:07,  1.30s/it][A
+  7%|▋         | 68/997 [01:28<20:05,  1.30s/it][A
+  7%|▋         | 69/997 [01:30<20:03,  1.30s/it][A
+  7%|▋         | 70/997 [01:31<20:02,  1.30s/it][A
+  7%|▋         | 71/997 [01:32<20:02,  1.30s/it][A
+  7%|▋         | 72/997 [01:34<20:01,  1.30s/it][A
+  7%|▋         | 73/997 [01:35<19:59,  1.30s/it][A
+  7%|▋         | 74/997 [01:36<19:56,  1.30s/it][A
+  8%|▊         | 75/997 [01:38<19:55,  1.30s/it][A
+  8%|▊         | 76/997 [01:39<19:54,  1.30s/it][A
+  8%|▊         | 77/997 [01:40<19:52,  1.30s/it][A
+  8%|▊         | 78/997 [01:41<19:51,  1.30s/it][A
+  8%|▊         | 79/997 [01:43<19:50,  1.30s/it][A
+  8%|▊         | 80/997 [01:44<19:49,  1.30s/it][A
+  8%|▊         | 81/997 [01:45<19:48,  1.30s/it][A
+  8%|▊         | 82/997 [01:47<19:46,  1.30s/it][A
+  8%|▊         | 83/997 [01:48<19:44,  1.30s/it][A
+  8%|▊         | 84/997 [01:49<19:43,  1.30s/it][A
+  9%|▊         | 85/997 [01:51<19:42,  1.30s/it][A
+  9%|▊         | 86/997 [01:52<19:40,  1.30s/it][A
+  9%|▊         | 87/997 [01:53<19:40,  1.30s/it][A
+  9%|▉         | 88/997 [01:54<19:38,  1.30s/it][A
+  9%|▉         | 89/997 [01:56<19:36,  1.30s/it][A
+  9%|▉         | 90/997 [01:57<19:36,  1.30s/it][A
+  9%|▉         | 91/997 [01:58<19:34,  1.30s/it][A
+  9%|▉         | 92/997 [02:00<19:33,  1.30s/it][A
+  9%|▉         | 93/997 [02:01<19:33,  1.30s/it][A
+  9%|▉         | 94/997 [02:02<19:32,  1.30s/it][A
+ 10%|▉         | 95/997 [02:04<19:32,  1.30s/it][A
+ 10%|▉         | 96/997 [02:05<19:36,  1.31s/it][A
+ 10%|▉         | 97/997 [02:06<19:33,  1.30s/it][A
+ 10%|▉         | 98/997 [02:07<19:30,  1.30s/it][A
+ 10%|▉         | 99/997 [02:09<19:29,  1.30s/it][A
+ 10%|█         | 100/997 [02:10<19:28,  1.30s/it][A
+ 10%|█         | 101/997 [02:11<19:25,  1.30s/it][A
+ 10%|█         | 102/997 [02:13<19:24,  1.30s/it][A
+ 10%|█         | 103/997 [02:14<19:22,  1.30s/it][A
+ 10%|█         | 104/997 [02:15<19:21,  1.30s/it][A
+ 11%|█         | 105/997 [02:17<19:19,  1.30s/it][A
+ 11%|█         | 106/997 [02:18<19:18,  1.30s/it][A
+ 11%|█         | 107/997 [02:19<19:16,  1.30s/it][A
+ 11%|█         | 108/997 [02:20<19:15,  1.30s/it][A
+ 11%|█         | 109/997 [02:22<19:13,  1.30s/it][A
+ 11%|█         | 110/997 [02:23<19:12,  1.30s/it][A
+ 11%|█         | 111/997 [02:24<19:10,  1.30s/it][A
+ 11%|█         | 112/997 [02:26<19:08,  1.30s/it][A
+ 11%|█▏        | 113/997 [02:27<19:07,  1.30s/it][A
+ 11%|█▏        | 114/997 [02:28<19:05,  1.30s/it][A
+ 12%|█▏        | 115/997 [02:30<19:04,  1.30s/it][A
+ 12%|█▏        | 116/997 [02:31<19:03,  1.30s/it][A
+ 12%|█▏        | 117/997 [02:32<19:02,  1.30s/it][A
+ 12%|█▏        | 118/997 [02:33<19:01,  1.30s/it][A
+ 12%|█▏        | 119/997 [02:35<18:59,  1.30s/it][A
+ 12%|█▏        | 120/997 [02:36<18:57,  1.30s/it][A
+ 12%|█▏        | 121/997 [02:37<18:55,  1.30s/it][A
+ 12%|█▏        | 122/997 [02:39<18:53,  1.30s/it][A
+ 12%|█▏        | 123/997 [02:40<18:52,  1.30s/it][A
+ 12%|█▏        | 124/997 [02:41<18:51,  1.30s/it][A
+ 13%|█▎        | 125/997 [02:42<18:50,  1.30s/it][A
+ 13%|█▎        | 126/997 [02:44<18:48,  1.30s/it][A
+ 13%|█▎        | 127/997 [02:45<18:47,  1.30s/it][A
+ 13%|█▎        | 128/997 [02:46<18:46,  1.30s/it][A
+ 13%|█▎        | 129/997 [02:48<18:45,  1.30s/it][A
+ 13%|█▎        | 130/997 [02:49<18:43,  1.30s/it][A
+ 13%|█▎        | 131/997 [02:50<18:42,  1.30s/it][A
+ 13%|█▎        | 132/997 [02:52<18:41,  1.30s/it][A
+ 13%|█▎        | 133/997 [02:53<18:40,  1.30s/it][A
+ 13%|█▎        | 134/997 [02:54<18:39,  1.30s/it][A
+ 14%|█▎        | 135/997 [02:55<18:37,  1.30s/it][A
+ 14%|█▎        | 136/997 [02:57<18:35,  1.30s/it][A
+ 14%|█▎        | 137/997 [02:58<18:34,  1.30s/it][A
+ 14%|█▍        | 138/997 [02:59<18:33,  1.30s/it][A
+ 14%|█▍        | 139/997 [03:01<18:32,  1.30s/it][A
+ 14%|█▍        | 140/997 [03:02<18:30,  1.30s/it][A
+ 14%|█▍        | 141/997 [03:03<18:29,  1.30s/it][A
+ 14%|█▍        | 142/997 [03:05<18:28,  1.30s/it][A
+ 14%|█▍        | 143/997 [03:06<18:26,  1.30s/it][A
+ 14%|█▍        | 144/997 [03:07<18:25,  1.30s/it][A
+ 15%|█▍        | 145/997 [03:08<18:24,  1.30s/it][A
+ 15%|█▍        | 146/997 [03:10<18:23,  1.30s/it][A
+ 15%|█▍        | 147/997 [03:11<18:22,  1.30s/it][A
+ 15%|█▍        | 148/997 [03:12<18:22,  1.30s/it][A
+ 15%|█▍        | 149/997 [03:14<18:34,  1.31s/it][A
+ 15%|█▌        | 150/997 [03:15<18:28,  1.31s/it][A
+ 15%|█▌        | 151/997 [03:16<18:25,  1.31s/it][A
+ 15%|█▌        | 152/997 [03:18<18:22,  1.30s/it][A
+ 15%|█▌        | 153/997 [03:19<18:20,  1.30s/it][A
+ 15%|█▌        | 154/997 [03:20<18:18,  1.30s/it][A
+ 16%|█▌        | 155/997 [03:21<18:16,  1.30s/it][A
+ 16%|█▌        | 156/997 [03:23<18:14,  1.30s/it][A
+ 16%|█▌        | 157/997 [03:24<18:12,  1.30s/it][A
+ 16%|█▌        | 158/997 [03:25<18:10,  1.30s/it][A
+ 16%|█▌        | 159/997 [03:27<18:08,  1.30s/it][A
+ 16%|█▌        | 160/997 [03:28<18:06,  1.30s/it][A
+ 16%|█▌        | 161/997 [03:29<18:05,  1.30s/it][A
+ 16%|█▌        | 162/997 [03:31<18:03,  1.30s/it][A
+ 16%|█▋        | 163/997 [03:32<18:02,  1.30s/it][A
+ 16%|█▋        | 164/997 [03:33<18:00,  1.30s/it][A
+ 17%|█▋        | 165/997 [03:34<17:59,  1.30s/it][A
+ 17%|█▋        | 166/997 [03:36<17:57,  1.30s/it][A
+ 17%|█▋        | 167/997 [03:37<17:56,  1.30s/it][A
+ 17%|█▋        | 168/997 [03:38<17:54,  1.30s/it][A
+ 17%|█▋        | 169/997 [03:40<17:53,  1.30s/it][A
+ 17%|█▋        | 170/997 [03:41<17:52,  1.30s/it][A
+ 17%|█▋        | 171/997 [03:42<17:50,  1.30s/it][A
+ 17%|█▋        | 172/997 [03:44<17:49,  1.30s/it][A
