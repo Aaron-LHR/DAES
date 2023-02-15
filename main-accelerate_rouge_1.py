@@ -8,10 +8,10 @@ from optparse import OptionParser
 import torch.nn as nn
 import os
 import numpy as np
-import matplotlib
+# import matplotlib
 import argparse
 # matplotlib.use('Qt5Agg')
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from torch import nn
 import copy
@@ -208,6 +208,7 @@ def main():
     distributedDataParallelKwargs.find_unused_parameters = True
     accelerator = Accelerator(kwargs_handlers=[distributedDataParallelKwargs])
     device = accelerator.device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     accelerator.print("================")
     accelerator.print(f"device: {device}")
     
