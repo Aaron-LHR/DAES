@@ -133,7 +133,7 @@ def test(model, options, test_data_loader, loss_function, accelerator, tokenizer
             for k, v in batch.items():
                 batch[k] = v.to(accelerator.device)
             outputs = model(batch)
-            functioned_loss = loss_function(outputs, batch["labels"])
+            functioned_loss = loss_function(outputs, batch["extractive_summary_label"] * 1.0)
             masked_loss = functioned_loss * batch["labels_mask"]
             sumed_loss = masked_loss.sum()
             dived_loss = (sumed_loss / sumed_loss.numel())
@@ -148,7 +148,7 @@ def test(model, options, test_data_loader, loss_function, accelerator, tokenizer
                 pred_summarization_list = [text["split_article"][i][j] for j, cls_pred in enumerate(pred_label) if cls_pred == True]
                 pred_summarization = " ".join(pred_summarization_list)
                 reference = " ".join(text["split_highlights"][i])
-                rouge_score_list.append(scorer.score(pred_summarization, reference))
+                rouge_score_list.append(scorer.score(pred_summarization, reference)["rouge1"].fmeasure)
     #             accelerator.gather_for_metrics((pred_summarization, reference))
     #             accelerator.print("=============predictions=============")
     #             accelerator.print(type(predictions))
@@ -180,6 +180,7 @@ def test(model, options, test_data_loader, loss_function, accelerator, tokenizer
     
 #     accelerator.wait_for_everyone()
 #     rouge_score = rouge_metric.compute()
+#     print(rouge_score_list)
     rouge_score_list = accelerator.gather_for_metrics(rouge_score_list)
     mean_rouge_score = np.mean(rouge_score_list)
     accelerator.print(f"rouge:{mean_rouge_score}")
@@ -208,7 +209,7 @@ def main():
     distributedDataParallelKwargs.find_unused_parameters = True
     accelerator = Accelerator(kwargs_handlers=[distributedDataParallelKwargs])
     device = accelerator.device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+#     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     accelerator.print("================")
     accelerator.print(f"device: {device}")
     
@@ -248,7 +249,8 @@ def main():
     
     accelerator.register_for_checkpointing(model, optimizer, scheduler)
     model_path = f'{work_dir}model/BertSumExt-learningrate_{options.learning_rate}-loss_bce-optimizer_{options.optimizer}-bcs_{options.batch_size}-scheduler_{options.scheduler}-randomseed_{options.random_seed}'
-    mkdir(model_path)
+    if accelerator.is_local_main_process:
+        mkdir(model_path)
     
     min_eloss = None
     min_tloss = None
@@ -267,7 +269,7 @@ def main():
             outputs = model(batch)
 
 
-            functioned_loss = loss_function(outputs, batch["labels"])
+            functioned_loss = loss_function(outputs, batch["extractive_summary_label"] * 1.0)
             masked_loss = functioned_loss * batch["labels_mask"]
             sumed_loss = masked_loss.sum()
             dived_loss = (sumed_loss / sumed_loss.numel())
