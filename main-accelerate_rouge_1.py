@@ -175,14 +175,15 @@ def test(model, options, test_data_loader, loss_function, accelerator, tokenizer
     #         accelerator.gather_for_metrics((predictions, references))
     #             accelerator.print(predictions)
     #         rouge_metric.add_batch(predictions=predictions, references=references)
-            break
+#             break
     
     
 #     accelerator.wait_for_everyone()
 #     rouge_score = rouge_metric.compute()
-#     print(rouge_score_list)
+    rouge_score_list = torch.Tensor(rouge_score_list).to(accelerator.device)
     rouge_score_list = accelerator.gather_for_metrics(rouge_score_list)
-    mean_rouge_score = np.mean(rouge_score_list)
+    
+    mean_rouge_score = torch.mean(rouge_score_list)
     accelerator.print(f"rouge:{mean_rouge_score}")
 #     accelerator.print(rouge_metric.compute(predictions=predictions, references=references))
     accelerator.print(f'test loss: {epoch_loss}')
@@ -256,7 +257,7 @@ def main():
     min_tloss = None
     max_rouge = None
     best_model_path = None
-    epochs = 14
+    epochs = 1
     for i in tqdm(range(epochs), disable=not accelerator.is_local_main_process):
         accelerator.print(f"===========epoch:{i}===========")
         accelerator.print("-" * 10 + "train" + "-" * 10)
@@ -285,7 +286,7 @@ def main():
 #                     accelerator.print(name)
             
             optimizer.step()
-            break
+#             break
 
         if i % 1 == 0:
             accelerator.print(f'epoch: {i} loss: {epoch_loss: .4f}\tlr: {optimizer.param_groups[0]["lr"]: .10f}')
