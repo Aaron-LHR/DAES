@@ -34,6 +34,7 @@ from transformers.modeling_outputs import (
     Seq2SeqQuestionAnsweringModelOutput,
     Seq2SeqSequenceClassifierOutput,
 )
+from Seq2SeqWithExtLMOutput import Seq2SeqWithExtLMOutput
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import (
     add_code_sample_docstrings,
@@ -68,6 +69,7 @@ BART_PRETRAINED_MODEL_ARCHIVE_LIST = [
     # see all BART models at https://huggingface.co/models?filter=bart
 ]
 
+BartForConditionalGenerationWithRougeClass = {"BartForConditionalGenerationWithRouge1"}
 
 def shift_tokens_right(input_ids: torch.Tensor, pad_token_id: int, decoder_start_token_id: int):
     """
@@ -1472,6 +1474,7 @@ class BartForConditionalGenerationWithRouge1(BartPretrainedModel):
         self.model = BartModel(config)
         self.register_buffer("final_logits_bias", torch.zeros((1, self.model.shared.num_embeddings)))
         self.lm_head = nn.Linear(config.d_model, self.model.shared.num_embeddings, bias=False)
+        self.rouge1_head = nn.Linear(config.d_model, 1, bias=False)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1519,11 +1522,12 @@ class BartForConditionalGenerationWithRouge1(BartPretrainedModel):
             inputs_embeds: Optional[torch.FloatTensor] = None,
             decoder_inputs_embeds: Optional[torch.FloatTensor] = None,
             labels: Optional[torch.LongTensor] = None,
+            ext_rouge1_labels: Optional[torch.FloatTensor] = None,
             use_cache: Optional[bool] = None,
             output_attentions: Optional[bool] = None,
             output_hidden_states: Optional[bool] = None,
             return_dict: Optional[bool] = None,
-    ) -> Union[Tuple, Seq2SeqLMOutput]:
+    ) -> Union[Tuple, Seq2SeqLMOutput, Seq2SeqWithExtLMOutput]:
         r"""
         labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
             Labels for computing the masked language modeling loss. Indices should either be in `[0, ...,
@@ -1564,16 +1568,24 @@ class BartForConditionalGenerationWithRouge1(BartPretrainedModel):
         lm_logits = self.lm_head(outputs[0])
         lm_logits = lm_logits + self.final_logits_bias.to(lm_logits.device)
 
+        ext_rouge1_logits = self.rouge1_head(outputs.encoder_last_hidden_state)
+        ext_rouge1_logits = torch.sigmoid(ext_rouge1_logits).to(lm_logits.device)
+
         masked_lm_loss = None
         if labels is not None:
             loss_fct = CrossEntropyLoss()
             masked_lm_loss = loss_fct(lm_logits.view(-1, self.config.vocab_size), labels.view(-1))
 
+        masked_ext_rouge1_loss = None
+        if ext_rouge1_labels is not None:
+            ext_rouge1_loss_fct = BCEWithLogitsLoss()
+            masked_ext_rouge1_loss = ext_rouge1_loss_fct(ext_rouge1_logits.view(-1), ext_rouge1_labels.view(-1))
+
         if not return_dict:
             output = (lm_logits,) + outputs[1:]
             return ((masked_lm_loss,) + output) if masked_lm_loss is not None else output
 
-        return Seq2SeqLMOutput(
+        return Seq2SeqWithExtLMOutput(
             loss=masked_lm_loss,
             logits=lm_logits,
             past_key_values=outputs.past_key_values,
@@ -1583,6 +1595,7 @@ class BartForConditionalGenerationWithRouge1(BartPretrainedModel):
             encoder_last_hidden_state=outputs.encoder_last_hidden_state,
             encoder_hidden_states=outputs.encoder_hidden_states,
             encoder_attentions=outputs.encoder_attentions,
+            masked_ext_rouge1_loss=masked_ext_rouge1_loss
         )
 
     def prepare_inputs_for_generation(
