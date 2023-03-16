@@ -23,6 +23,11 @@ import json
 import logging
 import math
 import os
+from collections import defaultdict, Counter
+import platform
+if "Windows" in platform.system() or "windows" in platform.system():
+    os.environ["http_proxy"] = "http://127.0.0.1:7890"
+    os.environ["https_proxy"] = "http://127.0.0.1:7890"
 import random
 from pathlib import Path
 
@@ -64,6 +69,7 @@ require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/summ
 # You should update this to your particular problem to have better documentation of `model_type`
 MODEL_CONFIG_CLASSES = list(MODEL_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
+MODEL_TYPES = tuple(list(MODEL_TYPES) + ["BartForConditionalGenerationWithRouge1"])
 
 try:
     nltk.data.find("tokenizers/punkt")
@@ -138,7 +144,7 @@ def parse_args():
         help="The number of processes to use for the preprocessing.",
     )
     parser.add_argument(
-        "--overwrite_cache", action="store_true", help="Overwrite the cached training and evaluation sets"
+        "--overwrite_cache", default=False, action="store_true", help="Overwrite the cached training and evaluation sets"
     )
     parser.add_argument(
         "--max_target_length",
@@ -332,6 +338,11 @@ def main():
     # in the environment
     accelerator_log_kwargs = {}
 
+    if args.model_type == "BartForConditionalGenerationWithRouge1":
+        from bart_with_ext import BartForConditionalGenerationWithRougeClass, BartForConditionalGenerationWithRouge1
+        from DataCollatorForBartForConditionalGenerationWithRouge import \
+            DataCollatorForBartForConditionalGenerationWithRouge
+
     if args.with_tracking:
         accelerator_log_kwargs["log_with"] = args.report_to
         accelerator_log_kwargs["logging_dir"] = args.output_dir
@@ -431,11 +442,18 @@ def main():
         )
 
     if args.model_name_or_path:
-        model = AutoModelForSeq2SeqLM.from_pretrained(
-            args.model_name_or_path,
-            from_tf=bool(".ckpt" in args.model_name_or_path),
-            config=config,
-        )
+        if args.model_type == "BartForConditionalGenerationWithRouge1":
+            model = BartForConditionalGenerationWithRouge1.from_pretrained(
+                args.model_name_or_path,
+                from_tf=bool(".ckpt" in args.model_name_or_path),
+                config=config,
+            )
+        else:
+            model = AutoModelForSeq2SeqLM.from_pretrained(
+                args.model_name_or_path,
+                from_tf=bool(".ckpt" in args.model_name_or_path),
+                config=config,
+            )
     else:
         logger.info("Training new model from scratch")
         model = AutoModelForSeq2SeqLM.from_config(config)
@@ -477,6 +495,32 @@ def main():
     max_target_length = args.max_target_length
     padding = "max_length" if args.pad_to_max_length else False
 
+    def get_salient_score(article, summary):
+        scores = {}
+        AS = len([token for token in article if token not in tokenizer.all_special_ids])
+        SS = len([token for token in summary if token not in tokenizer.all_special_ids])
+        a_counter = Counter(article)
+        s_counter = defaultdict(int)
+        for k, v in Counter(summary).items():
+            s_counter[k] = v
+        for token in article:
+            scores[token] = 1 - np.exp(-(np.log(AS / a_counter[token]) / np.log(SS / (s_counter[token] + 1))))
+        return scores
+
+    def get_input_sailent_scores(article, summary):
+        scores = get_salient_score(article, summary)
+        return torch.Tensor([scores[token] if token not in tokenizer.all_special_ids else -100 for token in article])
+
+    def get_batch_sailent_scores(articles, summaries):
+        assert len(articles) == len(summaries)
+        batch_scores = []
+        for i in range(len(articles)):
+            article = articles[i]
+            summary = summaries[i]
+            scores = get_salient_score(article, summary)
+            batch_scores.append([scores[token] if token not in tokenizer.all_special_ids else -100 for token in article])
+        return batch_scores
+
     def preprocess_function(examples):
         inputs = examples[text_column]
         targets = examples[summary_column]
@@ -494,6 +538,8 @@ def main():
             ]
 
         model_inputs["labels"] = labels["input_ids"]
+        if args.model_type == "BartForConditionalGenerationWithRouge1":
+            model_inputs["ext_rouge1_labels"] = get_batch_sailent_scores(model_inputs["input_ids"], model_inputs["labels"])
         return model_inputs
 
     with accelerator.main_process_first():
@@ -507,19 +553,27 @@ def main():
         )
 
     train_dataset = processed_datasets["train"]
-    eval_dataset = processed_datasets["validation"]
+    eval_dataset = processed_datasets["test"]
 
     # Log a few random samples from the training set:
     for index in random.sample(range(len(train_dataset)), 1):
         logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
 
     label_pad_token_id = -100 if args.ignore_pad_token_for_loss else tokenizer.pad_token_id
-    data_collator = DataCollatorForSeq2Seq(
-        tokenizer,
-        model=model,
-        label_pad_token_id=label_pad_token_id,
-        pad_to_multiple_of=8 if accelerator.use_fp16 else None,
-    )
+    if args.model_type == "BartForConditionalGenerationWithRouge1":
+        data_collator = DataCollatorForBartForConditionalGenerationWithRouge(
+            tokenizer,
+            model=model,
+            label_pad_token_id=label_pad_token_id,
+            pad_to_multiple_of=8 if accelerator.use_fp16 else None,
+        )
+    else:
+        data_collator = DataCollatorForSeq2Seq(
+            tokenizer,
+            model=model,
+            label_pad_token_id=label_pad_token_id,
+            pad_to_multiple_of=8 if accelerator.use_fp16 else None,
+        )
 
     def postprocess_text(preds, labels):
         preds = [pred.strip() for pred in preds]
@@ -633,6 +687,7 @@ def main():
         model.train()
         if args.with_tracking:
             total_loss = 0
+            total_ext_rouge1_loss = 0
         for step, batch in enumerate(train_dataloader):
             # We need to skip steps until we reach the resumed step
             if args.resume_from_checkpoint and epoch == starting_epoch:
@@ -642,10 +697,19 @@ def main():
 
             with accelerator.accumulate(model):
                 outputs = model(**batch)
-                loss = outputs.loss
-                # We keep track of the loss at each epoch
-                if args.with_tracking:
-                    total_loss += loss.detach().float()
+                if args.model_type == "BartForConditionalGenerationWithRouge1":
+                    abs_loss = outputs.loss
+                    masked_ext_rouge1_loss = outputs.masked_ext_rouge1_loss
+                    # We keep track of the loss at each epoch
+                    if args.with_tracking:
+                        total_loss += abs_loss.detach().float()
+                        total_ext_rouge1_loss += masked_ext_rouge1_loss.detach().float()
+                    loss = abs_loss + masked_ext_rouge1_loss
+                else:
+                    loss = outputs.loss
+                    # We keep track of the loss at each epoch
+                    if args.with_tracking:
+                        total_loss += loss.detach().float()
                 accelerator.backward(loss)
                 optimizer.step()
                 lr_scheduler.step()
@@ -716,6 +780,9 @@ def main():
             result["train_loss"] = total_loss.item() / len(train_dataloader)
             result["epoch"] = epoch
             result["step"] = completed_steps
+            if args.model_type == "BartForConditionalGenerationWithRouge1":
+                result["total_ext_rouge1_loss"] = total_ext_rouge1_loss.item() / len(train_dataloader)
+                result["abs_ext_rouge1_loss"] = result["train_loss"] + result["total_ext_rouge1_loss"]
             accelerator.log(result, step=completed_steps)
 
         if args.push_to_hub and epoch < args.num_train_epochs - 1:
