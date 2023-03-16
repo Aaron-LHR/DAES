@@ -1,5 +1,6 @@
 accelerate launch --mixed_precision=fp16 run_summarization_no_trainer.py ^
     --model_name_or_path facebook/bart-base ^
+    --model_type BartForConditionalGenerationWithRouge1 ^
     --dataset_name cnn_dailymail ^
     --dataset_config "3.0.0" ^
     --output_dir model/bart-base_cnn-dailymail_rouge1 ^
