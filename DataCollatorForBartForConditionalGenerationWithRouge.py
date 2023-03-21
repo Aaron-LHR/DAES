@@ -712,7 +712,7 @@ class DataCollatorForBartForConditionalGenerationWithRouge:
 
         if ext_flag:
             for ext_index, ext_rouge1_label in enumerate(ext_rouge1_labels):
-                ext_rouge1_labels[ext_index] += [-100] * (features["input_ids"].shape[1] - len(ext_rouge1_label))
+                ext_rouge1_labels[ext_index] += [0] * (features["input_ids"].shape[1] - len(ext_rouge1_label))
             features[ext_label] = torch.Tensor(ext_rouge1_labels)
         # for k, v in features.items():
         #     print("a", k, v.shape, type(v))

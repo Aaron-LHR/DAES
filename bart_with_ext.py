@@ -1479,6 +1479,8 @@ class BartForConditionalGenerationWithRouge1(BartPretrainedModel):
         # Initialize weights and apply final processing
         self.post_init()
 
+        # self.debug_out = open("bart.log", "w")
+
     def get_encoder(self):
         return self.model.get_encoder()
 
@@ -1569,7 +1571,6 @@ class BartForConditionalGenerationWithRouge1(BartPretrainedModel):
         lm_logits = lm_logits + self.final_logits_bias.to(lm_logits.device)
 
         ext_rouge1_logits = self.rouge1_head(outputs.encoder_last_hidden_state)
-        ext_rouge1_logits = torch.sigmoid(ext_rouge1_logits).to(lm_logits.device)
 
         masked_lm_loss = None
         if labels is not None:
@@ -1579,6 +1580,11 @@ class BartForConditionalGenerationWithRouge1(BartPretrainedModel):
         masked_ext_rouge1_loss = None
         if ext_rouge1_labels is not None:
             ext_rouge1_loss_fct = BCEWithLogitsLoss()
+            # self.debug_out.write("===============\n")
+            # self.debug_out.write(ext_rouge1_logits.view(-1))
+            # self.debug_out.write("\n")
+            # self.debug_out.write(ext_rouge1_labels.view(-1))
+            # self.debug_out.write("\n")
             masked_ext_rouge1_loss = ext_rouge1_loss_fct(ext_rouge1_logits.view(-1), ext_rouge1_labels.view(-1))
 
         if not return_dict:

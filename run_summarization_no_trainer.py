@@ -504,12 +504,17 @@ def main():
         for k, v in Counter(summary).items():
             s_counter[k] = v
         for token in article:
-            scores[token] = 1 - np.exp(-(np.log(AS / a_counter[token]) / np.log(SS / (s_counter[token] + 1))))
+            if token in summary:
+                scores[token] = 1 - np.exp(-(np.log(AS / a_counter[token]) / np.log(SS / (s_counter[token]))))
+            else:
+                scores[token] = 0
         return scores
 
     def get_input_sailent_scores(article, summary):
         scores = get_salient_score(article, summary)
-        return torch.Tensor([scores[token] if token not in tokenizer.all_special_ids else -100 for token in article])
+        # return torch.Tensor([scores[token] if token not in tokenizer.all_special_ids else 0 for token in article])
+        return torch.Tensor([scores[token] for token in article])
+
 
     def get_batch_sailent_scores(articles, summaries):
         assert len(articles) == len(summaries)
@@ -518,7 +523,8 @@ def main():
             article = articles[i]
             summary = summaries[i]
             scores = get_salient_score(article, summary)
-            batch_scores.append([scores[token] if token not in tokenizer.all_special_ids else -100 for token in article])
+            # batch_scores.append([scores[token] if token not in tokenizer.all_special_ids else -100 for token in article])
+            batch_scores.append([scores[token] for token in article])
         return batch_scores
 
     def preprocess_function(examples):
@@ -548,7 +554,7 @@ def main():
             batched=True,
             num_proc=args.preprocessing_num_workers,
             remove_columns=column_names,
-            load_from_cache_file=not args.overwrite_cache,
+            load_from_cache_file=True,
             desc="Running tokenizer on dataset",
         )
 
