@@ -1,0 +1,22 @@
+accelerate launch --mixed_precision=fp16 run_summarization_no_trainer.py ^
+    --model_name_or_path facebook/bart-base ^
+    --model_type BartForConditionalGenerationWithRouge1 ^
+    --dataset_name cnn_dailymail ^
+    --dataset_config "3.0.0" ^
+    --target_domain_dataset_name xsum ^
+    --target_domain_samples_num 10000 ^
+    --output_dir model/bart-base_cnn-dailymail_rouge1 ^
+    --per_device_train_batch_size 14 ^
+    --per_device_eval_batch_size 14 ^
+    --learning_rate 3e-5 ^
+    --num_train_epochs 20 ^
+    --lr_scheduler_type linear ^
+    --num_warmup_steps 500 ^
+    --weight_decay 0.01 ^
+    --seed 1111 ^
+    --checkpointing_steps epoch ^
+    --max_target_length 142 ^
+    --num_beams 4 ^
+    --preprocessing_num_workers 15 ^
+    --with_tracking ^
+    --report_to wandb

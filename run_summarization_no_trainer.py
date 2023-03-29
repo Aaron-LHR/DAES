@@ -35,7 +35,7 @@ import datasets
 import nltk
 import numpy as np
 import torch
-from datasets import load_dataset
+from datasets import load_dataset, concatenate_datasets
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
@@ -109,6 +109,24 @@ def parse_args():
         type=str,
         default=None,
         help="The configuration name of the dataset to use (via the datasets library).",
+    )
+    parser.add_argument(
+        "--target_domain_dataset_name",
+        type=str,
+        default=None,
+        help="The name of the dataset to use (via the datasets library).",
+    )
+    parser.add_argument(
+        "--target_domain_dataset_config_name",
+        type=str,
+        default=None,
+        help="The configuration name of the dataset to use (via the datasets library).",
+    )
+    parser.add_argument(
+        "--target_domain_samples_num",
+        type=int,
+        default=None,
+        help="The number of samples of the target domain dataset to use.",
     )
     parser.add_argument(
         "--train_file", type=str, default=None, help="A csv or a json file containing the training data."
@@ -419,6 +437,12 @@ def main():
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
 
+    if args.target_domain_dataset_name is not None:
+        # Downloading and loading a dataset from the hub.
+        target_domain_raw_datasets = load_dataset(args.target_domain_dataset_name, args.target_domain_dataset_config_name)
+        if args.target_domain_samples_num is not None and args.target_domain_samples_num != 0:
+            target_domain_raw_datasets["train"] = target_domain_raw_datasets["train"].train_test_split(train_size=args.target_domain_samples_num)["train"]
+
     # Load pretrained model and tokenizer
     #
     # In distributed training, the .from_pretrained methods guarantee that only one local process can concurrently
@@ -490,6 +514,15 @@ def main():
             raise ValueError(
                 f"--summary_column' value '{args.summary_column}' needs to be one of: {', '.join(column_names)}"
             )
+    if args.target_domain_dataset_name is not None:
+        target_domain_dataset_columns = summarization_name_mapping.get(args.target_domain_dataset_name, None)
+        target_domain_raw_datasets = target_domain_raw_datasets.rename_column(target_domain_dataset_columns[0], text_column)
+        target_domain_raw_datasets = target_domain_raw_datasets.rename_column(target_domain_dataset_columns[1], summary_column)
+
+        # for split in target_domain_raw_datasets.keys():
+        #     target_domain_raw_datasets[split][text_column] = target_domain_raw_datasets[split][target_domain_dataset_columns[0]]
+        #     target_domain_raw_datasets[split][summary_column] = target_domain_raw_datasets[split][target_domain_dataset_columns[1]]
+        #     target_domain_raw_datasets[split] = target_domain_raw_datasets[split].remove_columns(target_domain_dataset_columns)
 
     # Temporarily set max_target_length for training.
     max_target_length = args.max_target_length
@@ -497,15 +530,15 @@ def main():
 
     def get_salient_score(article, summary):
         scores = {}
-        AS = len([token for token in article if token not in tokenizer.all_special_ids])
-        SS = len([token for token in summary if token not in tokenizer.all_special_ids])
+        AS = len([token for token in article if token != tokenizer.pad_token_id])
+        SS = len([token for token in summary if token != tokenizer.pad_token_id])
         a_counter = Counter(article)
         s_counter = defaultdict(int)
         for k, v in Counter(summary).items():
             s_counter[k] = v
         for token in article:
             if token in summary:
-                scores[token] = 1 - np.exp(-(np.log(AS / a_counter[token]) / np.log(SS / (s_counter[token]))))
+                scores[token] = 1 - np.exp(-(np.log(AS / a_counter[token]) / np.log(SS / s_counter[token])))
             else:
                 scores[token] = 0
         return scores
@@ -557,9 +590,21 @@ def main():
             load_from_cache_file=True,
             desc="Running tokenizer on dataset",
         )
+        if args.target_domain_dataset_name is not None:
+            processed_target_domain_datasets = target_domain_raw_datasets.map(
+                preprocess_function,
+                batched=True,
+                num_proc=args.preprocessing_num_workers,
+                remove_columns=column_names,
+                load_from_cache_file=True,
+                desc="Running tokenizer on target domain dataset",
+            )
 
     train_dataset = processed_datasets["train"]
     eval_dataset = processed_datasets["test"]
+    if args.target_domain_dataset_name is not None:
+        if args.target_domain_samples_num is None or args.target_domain_samples_num != 0:
+            train_dataset = concatenate_datasets([train_dataset, processed_target_domain_datasets["train"]])
 
     # Log a few random samples from the training set:
     for index in random.sample(range(len(train_dataset)), 1):
@@ -595,6 +640,8 @@ def main():
         train_dataset, shuffle=True, collate_fn=data_collator, batch_size=args.per_device_train_batch_size
     )
     eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size)
+    if args.target_domain_dataset_name is not None:
+        target_domain_eval_dataloader = DataLoader(processed_target_domain_datasets["test"], collate_fn=data_collator, batch_size=args.per_device_eval_batch_size)
 
     # Optimizer
     # Split weights in two groups, one with weight decay and the other not.
@@ -625,10 +672,15 @@ def main():
         num_training_steps=args.max_train_steps * args.gradient_accumulation_steps,
     )
 
-    # Prepare everything with our `accelerator`.
-    model, optimizer, train_dataloader, eval_dataloader, lr_scheduler = accelerator.prepare(
-        model, optimizer, train_dataloader, eval_dataloader, lr_scheduler
-    )
+    if args.target_domain_dataset_name is not None:
+        model, optimizer, train_dataloader, eval_dataloader, target_domain_eval_dataloader, lr_scheduler = accelerator.prepare(
+            model, optimizer, train_dataloader, eval_dataloader, target_domain_eval_dataloader, lr_scheduler
+        )
+    else:
+        # Prepare everything with our `accelerator`.
+        model, optimizer, train_dataloader, eval_dataloader, lr_scheduler = accelerator.prepare(
+            model, optimizer, train_dataloader, eval_dataloader, lr_scheduler
+        )
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
@@ -779,6 +831,45 @@ def main():
                 )
         result = metric.compute(use_stemmer=True)
         result = {k: round(v * 100, 4) for k, v in result.items()}
+
+        if args.target_domain_dataset_name is not None:
+            for step, batch in enumerate(target_domain_eval_dataloader):
+                with torch.no_grad():
+                    generated_tokens = accelerator.unwrap_model(model).generate(
+                        batch["input_ids"],
+                        attention_mask=batch["attention_mask"],
+                        **gen_kwargs,
+                    )
+
+                    generated_tokens = accelerator.pad_across_processes(
+                        generated_tokens, dim=1, pad_index=tokenizer.pad_token_id
+                    )
+                    labels = batch["labels"]
+                    if not args.pad_to_max_length:
+                        # If we did not pad to max length, we need to pad the labels too
+                        labels = accelerator.pad_across_processes(batch["labels"], dim=1, pad_index=tokenizer.pad_token_id)
+
+                    generated_tokens, labels = accelerator.gather_for_metrics((generated_tokens, labels))
+                    generated_tokens = generated_tokens.cpu().numpy()
+                    labels = labels.cpu().numpy()
+
+                    if args.ignore_pad_token_for_loss:
+                        # Replace -100 in the labels as we can't decode them.
+                        labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
+                    if isinstance(generated_tokens, tuple):
+                        generated_tokens = generated_tokens[0]
+                    decoded_preds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
+                    decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
+
+                    decoded_preds, decoded_labels = postprocess_text(decoded_preds, decoded_labels)
+                    metric.add_batch(
+                        predictions=decoded_preds,
+                        references=decoded_labels,
+                    )
+            target_domain_result = metric.compute(use_stemmer=True)
+            target_domain_result = {k: round(v * 100, 4) for k, v in target_domain_result.items()}
+            for k, v in target_domain_result.items():
+                result[f"target_domain_{k}"] = v
 
         logger.info(result)
 
