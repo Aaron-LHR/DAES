@@ -1860,7 +1860,7 @@ class BartForConditionalGenerationWithRouge1Rouge2(BartPretrainedModel):
 @add_start_docstrings(
     "The BART Model with a language modeling head. Can be used for summarization.", BART_START_DOCSTRING
 )
-class ConstrativeBartForConditionalGenerationWithRouge1Rouge2(BartPretrainedModel):
+class ContrastiveBartForConditionalGenerationWithRouge1Rouge2(BartPretrainedModel):
     base_model_prefix = "model"
     _keys_to_ignore_on_load_missing = [
         r"final_logits_bias",
