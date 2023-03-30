@@ -69,7 +69,7 @@ BART_PRETRAINED_MODEL_ARCHIVE_LIST = [
     # see all BART models at https://huggingface.co/models?filter=bart
 ]
 
-BartForConditionalGenerationWithRougeClass = {"BartForConditionalGenerationWithRouge1"}
+BartForConditionalGenerationWithRougeClass = {"BartForConditionalGenerationWithRouge1", "BartForConditionalGenerationWithRouge1Rouge2"}
 
 def shift_tokens_right(input_ids: torch.Tensor, pad_token_id: int, decoder_start_token_id: int):
     """
@@ -1585,6 +1585,7 @@ class BartForConditionalGenerationWithRouge1(BartPretrainedModel):
             # self.debug_out.write("\n")
             # self.debug_out.write(ext_rouge1_labels.view(-1))
             # self.debug_out.write("\n")
+            # todo mask
             masked_ext_rouge1_loss = ext_rouge1_loss_fct(ext_rouge1_logits.view(-1), ext_rouge1_labels.view(-1))
 
         if not return_dict:
@@ -1716,6 +1717,7 @@ class BartForConditionalGenerationWithRouge1Rouge2(BartPretrainedModel):
             decoder_inputs_embeds: Optional[torch.FloatTensor] = None,
             labels: Optional[torch.LongTensor] = None,
             ext_rouge1_labels: Optional[torch.FloatTensor] = None,
+            ext_rouge2_labels: Optional[torch.FloatTensor] = None,
             use_cache: Optional[bool] = None,
             output_attentions: Optional[bool] = None,
             output_hidden_states: Optional[bool] = None,
@@ -1763,6 +1765,14 @@ class BartForConditionalGenerationWithRouge1Rouge2(BartPretrainedModel):
 
         ext_rouge1_logits = self.rouge1_head(outputs.encoder_last_hidden_state)
 
+        stride = 1
+        ext_rouge2_mean_pooling = (outputs.encoder_last_hidden_state[:, stride:] + outputs.encoder_last_hidden_state[:, :-stride]) / (stride + 1)
+        ext_rouge2_logits = self.rouge1_head(ext_rouge2_mean_pooling)
+        # print(outputs.encoder_last_hidden_state.shape)
+        # print(ext_rouge2_mean_pooling.shape)
+        # print(ext_rouge2_logits.shape)
+        # print(ext_rouge2_labels.shape)
+
         masked_lm_loss = None
         if labels is not None:
             loss_fct = CrossEntropyLoss()
@@ -1770,13 +1780,20 @@ class BartForConditionalGenerationWithRouge1Rouge2(BartPretrainedModel):
 
         masked_ext_rouge1_loss = None
         if ext_rouge1_labels is not None:
-            ext_rouge1_loss_fct = BCEWithLogitsLoss()
-            # self.debug_out.write("===============\n")
-            # self.debug_out.write(ext_rouge1_logits.view(-1))
-            # self.debug_out.write("\n")
-            # self.debug_out.write(ext_rouge1_labels.view(-1))
-            # self.debug_out.write("\n")
-            masked_ext_rouge1_loss = ext_rouge1_loss_fct(ext_rouge1_logits.view(-1), ext_rouge1_labels.view(-1))
+            ext_rouge1_loss_fct = BCEWithLogitsLoss(reduction="none")
+            padding_mask = (ext_rouge1_labels != -100)
+            masked_ext_rouge1_loss = ext_rouge1_loss_fct(ext_rouge1_logits.view(-1), ext_rouge1_labels.view(-1)).view(ext_rouge1_logits.shape[0], ext_rouge1_logits.shape[1]) * padding_mask
+            masked_ext_rouge1_loss = torch.sum(masked_ext_rouge1_loss) / torch.sum(padding_mask)
+
+        masked_ext_rouge2_loss = None
+        if ext_rouge2_labels is not None:
+            ext_rouge2_loss_fct = BCEWithLogitsLoss(reduction="none")
+            ext_rouge2_labels = ext_rouge2_labels[:, :ext_rouge2_logits.shape[1]].contiguous()
+            padding_mask = (ext_rouge2_labels != -100)
+            masked_ext_rouge2_loss = ext_rouge2_loss_fct(ext_rouge2_logits.view(-1), ext_rouge2_labels.view(-1)).view(ext_rouge2_logits.shape[0], ext_rouge2_logits.shape[1]) * padding_mask
+            masked_ext_rouge2_loss = torch.sum(masked_ext_rouge2_loss) / torch.sum(padding_mask)
+
+        # print(masked_lm_loss, masked_ext_rouge1_loss, masked_ext_rouge2_loss)
 
         if not return_dict:
             output = (lm_logits,) + outputs[1:]
@@ -1792,7 +1809,8 @@ class BartForConditionalGenerationWithRouge1Rouge2(BartPretrainedModel):
             encoder_last_hidden_state=outputs.encoder_last_hidden_state,
             encoder_hidden_states=outputs.encoder_hidden_states,
             encoder_attentions=outputs.encoder_attentions,
-            masked_ext_rouge1_loss=masked_ext_rouge1_loss
+            masked_ext_rouge1_loss=masked_ext_rouge1_loss,
+            masked_ext_rouge2_loss=masked_ext_rouge2_loss
         )
 
     def prepare_inputs_for_generation(

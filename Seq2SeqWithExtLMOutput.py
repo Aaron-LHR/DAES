@@ -797,6 +797,7 @@ class Seq2SeqWithExtLMOutput(ModelOutput):
     encoder_hidden_states: Optional[Tuple[torch.FloatTensor]] = None
     encoder_attentions: Optional[Tuple[torch.FloatTensor]] = None
     masked_ext_rouge1_loss: Optional[torch.FloatTensor] = None
+    masked_ext_rouge2_loss: Optional[torch.FloatTensor] = None
 
 
 @dataclass

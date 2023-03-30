@@ -69,7 +69,7 @@ require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/summ
 # You should update this to your particular problem to have better documentation of `model_type`
 MODEL_CONFIG_CLASSES = list(MODEL_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
-MODEL_TYPES = tuple(list(MODEL_TYPES) + ["BartForConditionalGenerationWithRouge1"])
+MODEL_TYPES = tuple(list(MODEL_TYPES) + ["BartForConditionalGenerationWithRouge1", "BartForConditionalGenerationWithRouge1Rouge2"])
 
 try:
     nltk.data.find("tokenizers/punkt")
@@ -356,10 +356,8 @@ def main():
     # in the environment
     accelerator_log_kwargs = {}
 
-    if args.model_type == "BartForConditionalGenerationWithRouge1":
-        from bart_with_ext import BartForConditionalGenerationWithRougeClass, BartForConditionalGenerationWithRouge1
-        from DataCollatorForBartForConditionalGenerationWithRouge import \
-            DataCollatorForBartForConditionalGenerationWithRouge
+    from bart_with_ext import BartForConditionalGenerationWithRougeClass, BartForConditionalGenerationWithRouge1, BartForConditionalGenerationWithRouge1Rouge2
+    from DataCollatorForBartForConditionalGenerationWithRouge import DataCollatorForBartForConditionalGenerationWithRouge
 
     if args.with_tracking:
         accelerator_log_kwargs["log_with"] = args.report_to
@@ -472,6 +470,12 @@ def main():
                 from_tf=bool(".ckpt" in args.model_name_or_path),
                 config=config,
             )
+        elif args.model_type == "BartForConditionalGenerationWithRouge1Rouge2":
+            model = BartForConditionalGenerationWithRouge1Rouge2.from_pretrained(
+                args.model_name_or_path,
+                from_tf=bool(".ckpt" in args.model_name_or_path),
+                config=config,
+            )
         else:
             model = AutoModelForSeq2SeqLM.from_pretrained(
                 args.model_name_or_path,
@@ -528,7 +532,7 @@ def main():
     max_target_length = args.max_target_length
     padding = "max_length" if args.pad_to_max_length else False
 
-    def get_salient_score(article, summary):
+    def get_salient_score_rouge1(article, summary):
         scores = {}
         AS = len([token for token in article if token != tokenizer.pad_token_id])
         SS = len([token for token in summary if token != tokenizer.pad_token_id])
@@ -536,28 +540,61 @@ def main():
         s_counter = defaultdict(int)
         for k, v in Counter(summary).items():
             s_counter[k] = v
+        res = []
         for token in article:
-            if token in summary:
-                scores[token] = 1 - np.exp(-(np.log(AS / a_counter[token]) / np.log(SS / s_counter[token])))
-            else:
-                scores[token] = 0
-        return scores
+            if token not in scores:
+                if token in summary:
+                    scores[token] = 1 - np.exp(-(np.log(AS / a_counter[token]) / np.log(SS / s_counter[token])))
+                else:
+                    scores[token] = 0
+            res.append(scores[token])
+        return res, scores
 
     def get_input_sailent_scores(article, summary):
-        scores = get_salient_score(article, summary)
+        scores = get_salient_score_rouge1(article, summary)
         # return torch.Tensor([scores[token] if token not in tokenizer.all_special_ids else 0 for token in article])
         return torch.Tensor([scores[token] for token in article])
 
 
-    def get_batch_sailent_scores(articles, summaries):
+    def get_batch_sailent_scores_rouge1(articles, summaries):
         assert len(articles) == len(summaries)
         batch_scores = []
         for i in range(len(articles)):
             article = articles[i]
             summary = summaries[i]
-            scores = get_salient_score(article, summary)
+            article_scores, scores = get_salient_score_rouge1(article, summary)
             # batch_scores.append([scores[token] if token not in tokenizer.all_special_ids else -100 for token in article])
-            batch_scores.append([scores[token] for token in article])
+            batch_scores.append(article_scores)
+        return batch_scores
+
+    def get_salient_score_rouge2(article, summary):
+        scores = {}
+        AS = len([token for token in article if token != tokenizer.pad_token_id]) - 1
+        SS = len([token for token in summary if token != tokenizer.pad_token_id]) - 1
+        article_2_grams = [f"{article[i]} {article[i + 1]}" for i in range(AS)]
+        summary_2_grams = [f"{summary[i]} {summary[i + 1]}" for i in range(SS)]
+        a_counter = Counter(article_2_grams)
+        s_counter = defaultdict(int)
+        for k, v in Counter(summary_2_grams).items():
+            s_counter[k] = v
+        res = []
+        for gram_2 in article_2_grams:
+            if gram_2 not in scores:
+                if gram_2 in summary_2_grams:
+                    scores[gram_2] = 1 - np.exp(-(np.log(AS / a_counter[gram_2]) / np.log(SS / s_counter[gram_2])))
+                else:
+                    scores[gram_2] = 0
+            res.append(scores[gram_2])
+        return res, scores
+
+    def get_batch_sailent_scores_rouge2(articles, summaries):
+        assert len(articles) == len(summaries)
+        batch_scores = []
+        for i in range(len(articles)):
+            article = articles[i]
+            summary = summaries[i]
+            article_scores, scores = get_salient_score_rouge2(article, summary)
+            batch_scores.append(article_scores)
         return batch_scores
 
     def preprocess_function(examples):
@@ -578,7 +615,10 @@ def main():
 
         model_inputs["labels"] = labels["input_ids"]
         if args.model_type == "BartForConditionalGenerationWithRouge1":
-            model_inputs["ext_rouge1_labels"] = get_batch_sailent_scores(model_inputs["input_ids"], model_inputs["labels"])
+            model_inputs["ext_rouge1_labels"] = get_batch_sailent_scores_rouge1(model_inputs["input_ids"], model_inputs["labels"])
+        elif args.model_type == "BartForConditionalGenerationWithRouge1Rouge2":
+            model_inputs["ext_rouge1_labels"] = get_batch_sailent_scores_rouge1(model_inputs["input_ids"], model_inputs["labels"])
+            model_inputs["ext_rouge2_labels"] = get_batch_sailent_scores_rouge2(model_inputs["input_ids"], model_inputs["labels"])
         return model_inputs
 
     with accelerator.main_process_first():
@@ -611,7 +651,7 @@ def main():
         logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
 
     label_pad_token_id = -100 if args.ignore_pad_token_for_loss else tokenizer.pad_token_id
-    if args.model_type == "BartForConditionalGenerationWithRouge1":
+    if args.model_type in BartForConditionalGenerationWithRougeClass:
         data_collator = DataCollatorForBartForConditionalGenerationWithRouge(
             tokenizer,
             model=model,
@@ -746,6 +786,7 @@ def main():
         if args.with_tracking:
             total_loss = 0
             total_ext_rouge1_loss = 0
+            total_ext_rouge2_loss = 0
         for step, batch in enumerate(train_dataloader):
             # We need to skip steps until we reach the resumed step
             if args.resume_from_checkpoint and epoch == starting_epoch:
@@ -763,6 +804,16 @@ def main():
                         total_loss += abs_loss.detach().float()
                         total_ext_rouge1_loss += masked_ext_rouge1_loss.detach().float()
                     loss = abs_loss + masked_ext_rouge1_loss
+                elif args.model_type == "BartForConditionalGenerationWithRouge1Rouge2":
+                    abs_loss = outputs.loss
+                    masked_ext_rouge1_loss = outputs.masked_ext_rouge1_loss
+                    masked_ext_rouge2_loss = outputs.masked_ext_rouge2_loss
+                    # We keep track of the loss at each epoch
+                    if args.with_tracking:
+                        total_loss += abs_loss.detach().float()
+                        total_ext_rouge1_loss += masked_ext_rouge1_loss.detach().float()
+                        total_ext_rouge2_loss += masked_ext_rouge2_loss.detach().float()
+                    loss = abs_loss + masked_ext_rouge1_loss + masked_ext_rouge2_loss
                 else:
                     loss = outputs.loss
                     # We keep track of the loss at each epoch
@@ -874,12 +925,16 @@ def main():
         logger.info(result)
 
         if args.with_tracking:
-            result["train_loss"] = total_loss.item() / len(train_dataloader)
+            result["train_loss"] = total_loss.item() / len(train_dataloader)  # 生成式loss
             result["epoch"] = epoch
             result["step"] = completed_steps
             if args.model_type == "BartForConditionalGenerationWithRouge1":
-                result["total_ext_rouge1_loss"] = total_ext_rouge1_loss.item() / len(train_dataloader)
-                result["abs_ext_rouge1_loss"] = result["train_loss"] + result["total_ext_rouge1_loss"]
+                result["total_ext_rouge1_loss"] = total_ext_rouge1_loss.item() / len(train_dataloader)  # rouge 1 loss
+                result["loss_sum"] = result["train_loss"] + result["total_ext_rouge1_loss"]  # 生成式 + rouge 1 loss
+            if args.model_type == "BartForConditionalGenerationWithRouge1Rouge2":
+                result["total_ext_rouge1_loss"] = total_ext_rouge1_loss.item() / len(train_dataloader)  # rouge 1 loss
+                result["total_ext_rouge2_loss"] = total_ext_rouge2_loss.item() / len(train_dataloader)  # rouge 2 loss
+                result["loss_sum"] = result["train_loss"] + result["total_ext_rouge1_loss"] + result["total_ext_rouge2_loss"]  # 生成式 + rouge 1 loss + rouge 2 loss
             accelerator.log(result, step=completed_steps)
 
         if args.push_to_hub and epoch < args.num_train_epochs - 1:

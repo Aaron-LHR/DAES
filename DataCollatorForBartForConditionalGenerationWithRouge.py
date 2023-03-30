@@ -682,13 +682,13 @@ class DataCollatorForBartForConditionalGenerationWithRouge:
         # for fi, feature in enumerate(features):
         #     for k, v in feature.items():
         #         print("b", fi, k, len(v), type(v))
-        ext_label = "ext_rouge1_labels"
-        ext_flag = False
-        if ext_label in features[0].keys():
-            ext_flag = True
-            ext_rouge1_labels = [feature[ext_label] for feature in features] if ext_label in features[0].keys() else None
-            for feature in features:
-                del feature[ext_label]
+        ext_labels = ["ext_rouge1_labels", "ext_rouge2_labels"]
+        ext_labels_cache = {}
+        for ext_label in ext_labels:
+            if ext_label in features[0].keys():
+                ext_labels_cache[ext_label] = [feature[ext_label] for feature in features]
+                for feature in features:
+                    del feature[ext_label]
         # for fi, feature in enumerate(features):
         #     for k, v in feature.items():
         #         print("m", fi, k, len(v), type(v))
@@ -709,11 +709,12 @@ class DataCollatorForBartForConditionalGenerationWithRouge:
         ):
             decoder_input_ids = self.model.prepare_decoder_input_ids_from_labels(labels=features["labels"])
             features["decoder_input_ids"] = decoder_input_ids
-
-        if ext_flag:
-            for ext_index, ext_rouge1_label in enumerate(ext_rouge1_labels):
-                ext_rouge1_labels[ext_index] += [0] * (features["input_ids"].shape[1] - len(ext_rouge1_label))
-            features[ext_label] = torch.Tensor(ext_rouge1_labels)
+        # print(ext_labels_cache.keys())
+        for ext_label, ext_label_feature in ext_labels_cache.items():
+            for ext_index, ext_rouge1_label in enumerate(ext_label_feature):
+                # print(ext_label, features["input_ids"].shape[1] - len(ext_rouge1_label))
+                ext_label_feature[ext_index] += [-100] * (features["input_ids"].shape[1] - len(ext_rouge1_label))
+            features[ext_label] = torch.Tensor(ext_label_feature)
         # for k, v in features.items():
         #     print("a", k, v.shape, type(v))
         return features
