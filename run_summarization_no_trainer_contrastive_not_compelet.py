@@ -25,9 +25,9 @@ import math
 import os
 from collections import defaultdict, Counter
 import platform
-if "Windows" in platform.system() or "windows" in platform.system():
-    os.environ["http_proxy"] = "http://127.0.0.1:7890"
-    os.environ["https_proxy"] = "http://127.0.0.1:7890"
+# if "Windows" in platform.system() or "windows" in platform.system():
+#     os.environ["http_proxy"] = "http://127.0.0.1:7890"
+#     os.environ["https_proxy"] = "http://127.0.0.1:7890"
 import random
 from pathlib import Path
 
@@ -59,6 +59,9 @@ from transformers import (
 from transformers.utils import check_min_version, get_full_repo_name, is_offline_mode, send_example_telemetry
 from transformers.utils.versions import require_version
 
+from bart_with_ext import BartForConditionalGenerationWithRougeClass, BartForConditionalGenerationWithRouge1, \
+    BartForConditionalGenerationWithRouge1Rouge2, ContrastiveBartForConditionalGenerationWithRouge1Rouge2
+from DataCollatorForBartForConditionalGenerationWithRouge import DataCollatorForBartForConditionalGenerationWithRouge
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.26.0")
@@ -69,7 +72,7 @@ require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/summ
 # You should update this to your particular problem to have better documentation of `model_type`
 MODEL_CONFIG_CLASSES = list(MODEL_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
-MODEL_TYPES = tuple(list(MODEL_TYPES) + ["BartForConditionalGenerationWithRouge1", "BartForConditionalGenerationWithRouge1Rouge2"])
+MODEL_TYPES = tuple(list(MODEL_TYPES) + list(BartForConditionalGenerationWithRougeClass))
 
 try:
     nltk.data.find("tokenizers/punkt")
@@ -312,18 +315,6 @@ def parse_args():
         help="If the training should continue from a checkpoint folder.",
     )
     parser.add_argument(
-        "--peft",
-        type=str,
-        default=None,
-        help="peft options.",
-    )
-    parser.add_argument(
-        "--decoder_prompt",
-        type=str,
-        default=None,
-        help="decoder prompt options.",
-    )
-    parser.add_argument(
         "--with_tracking",
         action="store_true",
         help="Whether to enable experiment trackers for logging.",
@@ -368,8 +359,6 @@ def main():
     # in the environment
     accelerator_log_kwargs = {}
 
-    from bart_with_ext import BartForConditionalGenerationWithRougeClass, BartForConditionalGenerationWithRouge1, BartForConditionalGenerationWithRouge1Rouge2
-    from DataCollatorForBartForConditionalGenerationWithRouge import DataCollatorForBartForConditionalGenerationWithRouge
 
     if args.with_tracking:
         accelerator_log_kwargs["log_with"] = args.report_to
@@ -488,30 +477,12 @@ def main():
                 from_tf=bool(".ckpt" in args.model_name_or_path),
                 config=config,
             )
-        elif args.peft == "lora":
-            model = AutoModelForSeq2SeqLM.from_pretrained(
+        elif args.model_type == "ContrastiveBartForConditionalGenerationWithRouge1Rouge2":
+            model = ContrastiveBartForConditionalGenerationWithRouge1Rouge2.from_pretrained(
                 args.model_name_or_path,
                 from_tf=bool(".ckpt" in args.model_name_or_path),
                 config=config,
-                load_in_8bit=True,
-                device_map="auto"
             )
-            from peft import LoraConfig, get_peft_model, prepare_model_for_int8_training, TaskType
-
-            # Define LoRA Config
-            lora_config = LoraConfig(
-                r=16,
-                lora_alpha=32,
-                lora_dropout=0.05,
-                bias="none",
-                task_type=TaskType.SEQ_2_SEQ_LM
-            )
-            # prepare int-8 model for training
-            model = prepare_model_for_int8_training(model)
-
-            # add LoRA adaptor
-            model = get_peft_model(model, lora_config)
-            model.print_trainable_parameters()
         else:
             model = AutoModelForSeq2SeqLM.from_pretrained(
                 args.model_name_or_path,
@@ -652,113 +623,12 @@ def main():
         model_inputs["labels"] = labels["input_ids"]
         if args.model_type == "BartForConditionalGenerationWithRouge1":
             model_inputs["ext_rouge1_labels"] = get_batch_sailent_scores_rouge1(model_inputs["input_ids"], model_inputs["labels"])
-        elif args.model_type == "BartForConditionalGenerationWithRouge1Rouge2":
+        elif args.model_type in ["BartForConditionalGenerationWithRouge1Rouge2", "ContrastiveBartForConditionalGenerationWithRouge1Rouge2"]:
             model_inputs["ext_rouge1_labels"] = get_batch_sailent_scores_rouge1(model_inputs["input_ids"], model_inputs["labels"])
             model_inputs["ext_rouge2_labels"] = get_batch_sailent_scores_rouge2(model_inputs["input_ids"], model_inputs["labels"])
         return model_inputs
 
-    def batch_map_subject_verb_obj(examples):
-        import spacy
-        from nltk.tokenize import sent_tokenize
-        # Load the parser
-        nlp = spacy.load('en_core_web_sm')
-
-        def get_first_subject_verb_object(sentence):
-            """
-            Extracts subject, verb and object from sentence using spaCy dependency parser.
-            """
-            # Parse the sentence
-            doc = nlp(sentence)
-
-            # Extract subject, verb and object
-            subject = ""
-            verb = ""
-            obj = ""
-
-            for token in doc:
-                if 'subj' in token.dep_ and not subject:
-                    subject = token.text
-                elif 'obj' in token.dep_ and not obj:
-                    obj = token.text
-                elif 'ROOT' in token.dep_ and not verb:
-                    verb = token.text
-
-            return subject, verb, obj
-
-        def get_subject_verb_obj_new_label(sents):
-            subjects, verbs, objs = [], [], []
-            for sent in sent_tokenize(sents):
-                subject, verb, obj = get_first_subject_verb_object(sent)
-                subjects.append(subject)
-                verbs.append(verb)
-                objs.append(obj)
-            res = f"Subject: {' '.join(subjects)} Verb: {' '.join(verbs)} Object: {' '.join(objs)} {tokenizer.special_tokens_map['additional_special_tokens'][-1]} {sents}"
-            return res
-
-        summarys = []
-        for summary in examples[summary_column]:
-            summarys.append(get_subject_verb_obj_new_label(summary).replace("\n", " "))
-        return {summary_column: summarys}
-
-    def batch_map_all_subject_verb_obj(examples):
-        import spacy
-        from nltk.tokenize import sent_tokenize
-        # Load the parser
-        nlp = spacy.load('en_core_web_sm')
-
-        def get_all_subject_verb_object(sentence):
-            """
-            Extracts subject, verb and object from sentence using spaCy dependency parser.
-            """
-            # Parse the sentence
-            doc = nlp(sentence)
-
-            # Extract subject, verb and object
-            subject = []
-            verb = []
-            obj = []
-
-            for token in doc:
-                if 'subj' in token.dep_:
-                    subject.append(token.text)
-                elif 'obj' in token.dep_:
-                    obj.append(token.text)
-                elif 'ROOT' in token.dep_:
-                    verb.append(token.text)
-
-            return subject, verb, obj
-
-        def get_subject_verb_obj_new_label(sents):
-            subjects, verbs, objs = [], [], []
-            for sent in sent_tokenize(sents):
-                subject, verb, obj = get_all_subject_verb_object(sent)
-                subjects.extend(subject)
-                verbs.extend(verb)
-                objs.extend(obj)
-            subjects = random.sample(subjects, min(len(subjects), 6))
-            verbs = random.sample(verbs, min(len(verbs), 6))
-            objs = random.sample(objs, min(len(objs), 6))
-            res = f"Subject: {' '.join(subjects)} Verb: {' '.join(verbs)} Object: {' '.join(objs)} {prompt_sep_token} {sents}"
-            return res
-
-        summarys = []
-        for summary in examples[summary_column]:
-            summarys.append(get_subject_verb_obj_new_label(summary))
-        return {summary_column: summarys}
-
     with accelerator.main_process_first():
-        if args.decoder_prompt == "svo":
-            prompt_sep_token = "<s>"
-            # tokenizer.add_special_tokens({"additional_special_tokens": [prompt_sep_token]})
-            prompt_sep_token_id = tokenizer.convert_tokens_to_ids(prompt_sep_token)
-            raw_datasets = raw_datasets.map(
-            batch_map_all_subject_verb_obj,
-            batched=True,
-            num_proc=args.preprocessing_num_workers,
-            load_from_cache_file=True,
-            desc="Running svo on dataset",
-        )
-
         processed_datasets = raw_datasets.map(
             preprocess_function,
             batched=True,
@@ -849,10 +719,6 @@ def main():
         num_training_steps=args.max_train_steps * args.gradient_accumulation_steps,
     )
 
-    if args.peft == "lora":
-        from peft.utils.other import fsdp_auto_wrap_policy
-        if getattr(accelerator.state, "fsdp_plugin", None) is not None:
-            accelerator.state.fsdp_plugin.auto_wrap_policy = fsdp_auto_wrap_policy(model)
     if args.target_domain_dataset_name is not None:
         model, optimizer, train_dataloader, eval_dataloader, target_domain_eval_dataloader, lr_scheduler = accelerator.prepare(
             model, optimizer, train_dataloader, eval_dataloader, target_domain_eval_dataloader, lr_scheduler
@@ -921,19 +787,23 @@ def main():
             resume_step = int(training_difference.replace("step_", ""))
             starting_epoch = resume_step // len(train_dataloader)
             resume_step -= starting_epoch * len(train_dataloader)
-    debug_file = open("log", "w", encoding="utf-8")
+
     for epoch in range(starting_epoch, args.num_train_epochs):
         model.train()
         if args.with_tracking:
             total_loss = 0
             total_ext_rouge1_loss = 0
             total_ext_rouge2_loss = 0
+            total_positive_positive_1_gram_contrastive_loss = 0
+            total_positive_negative_1_gram_contrastive_loss = 0
         for step, batch in enumerate(train_dataloader):
             # We need to skip steps until we reach the resumed step
             if args.resume_from_checkpoint and epoch == starting_epoch:
                 if resume_step is not None and step < resume_step:
                     completed_steps += 1
                     continue
+            if args.with_tracking:
+                accelerator.log({"learning_rate": optimizer.param_groups[0]["lr"]}, step=completed_steps)
 
             with accelerator.accumulate(model):
                 outputs = model(**batch)
@@ -955,6 +825,21 @@ def main():
                         total_ext_rouge1_loss += masked_ext_rouge1_loss.detach().float()
                         total_ext_rouge2_loss += masked_ext_rouge2_loss.detach().float()
                     loss = abs_loss + masked_ext_rouge1_loss + masked_ext_rouge2_loss
+                elif args.model_type == "ContrastiveBartForConditionalGenerationWithRouge1Rouge2":
+                    abs_loss = outputs.loss
+                    masked_ext_rouge1_loss = outputs.masked_ext_rouge1_loss
+                    masked_ext_rouge2_loss = outputs.masked_ext_rouge2_loss
+                    positive_positive_1_gram_contrastive_loss = outputs.positive_positive_1_gram_contrastive_loss
+                    # positive_negative_1_gram_contrastive_loss = outputs.positive_negative_1_gram_contrastive_loss
+                    # We keep track of the loss at each epoch
+                    if args.with_tracking:
+                        total_loss += abs_loss.detach().float()
+                        total_ext_rouge1_loss += masked_ext_rouge1_loss.detach().float()
+                        total_ext_rouge2_loss += masked_ext_rouge2_loss.detach().float()
+                        total_positive_positive_1_gram_contrastive_loss += positive_positive_1_gram_contrastive_loss.detach().float()
+                        # total_positive_negative_1_gram_contrastive_loss += positive_negative_1_gram_contrastive_loss.detach().float()
+                    # loss = abs_loss + masked_ext_rouge1_loss + masked_ext_rouge2_loss + positive_positive_1_gram_contrastive_loss + positive_negative_1_gram_contrastive_loss
+                    loss = abs_loss + masked_ext_rouge1_loss + masked_ext_rouge2_loss + positive_positive_1_gram_contrastive_loss
                 else:
                     loss = outputs.loss
                     # We keep track of the loss at each epoch
@@ -988,9 +873,7 @@ def main():
             "max_length": args.val_max_target_length if args is not None else config.max_length,
             "num_beams": args.num_beams,
         }
-        debug_flag = 1
-        accelerator.print("eval!!!!!")
-        for step, batch in tqdm(enumerate(eval_dataloader), total=len(eval_dataloader)):
+        for step, batch in enumerate(eval_dataloader):
             with torch.no_grad():
                 generated_tokens = accelerator.unwrap_model(model).generate(
                     batch["input_ids"],
@@ -1015,48 +898,10 @@ def main():
                     labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
                 if isinstance(generated_tokens, tuple):
                     generated_tokens = generated_tokens[0]
-
-                # todo: 把 0 换成每种 tokenizer 的 bos_token
-                if args.decoder_prompt == "svo":
-                    # def mask_prompt(x):
-                    #     mask = (x == prompt_sep_token_id).cumsum(dim=1) == 0
-                    #     x.masked_fill_(mask, 0)
-                    #     return x
-
-                    def mask_prompt(tensor):
-                        for i in range(tensor.shape[0]):
-                            zero_count = 0
-                            for j in range(tensor.shape[1]):
-                                if tensor[i][j] == 0:
-                                    zero_count += 1
-                                    if zero_count == 2:
-                                        break
-                                else:
-                                    tensor[i][j] = 0
-
-                        return tensor
-
-                    if debug_flag:
-                        raw_decoded_preds = tokenizer.batch_decode(generated_tokens)
-                        raw_decoded_labels = tokenizer.batch_decode(labels)
-                        accelerator.print(f"==============epoch {epoch} raw_decoded_preds==============", file=debug_file)
-                        accelerator.print(raw_decoded_preds, file=debug_file)
-                        accelerator.print(f"==============epoch {epoch} raw_decoded_labels==============", file=debug_file)
-                        accelerator.print(raw_decoded_labels, file=debug_file)
-                    generated_tokens = mask_prompt(generated_tokens)
-                    labels = mask_prompt(labels)
-
                 decoded_preds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
                 decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
 
                 decoded_preds, decoded_labels = postprocess_text(decoded_preds, decoded_labels)
-                if debug_flag:
-                    accelerator.print(f"==============epoch {epoch} decoded_preds==============", file=debug_file)
-                    accelerator.print(decoded_preds, file=debug_file)
-                    accelerator.print(f"==============epoch {epoch} decoded_labels==============", file=debug_file)
-                    accelerator.print(decoded_labels, file=debug_file)
-                    debug_flag -= 1
-
                 metric.add_batch(
                     predictions=decoded_preds,
                     references=decoded_labels,
