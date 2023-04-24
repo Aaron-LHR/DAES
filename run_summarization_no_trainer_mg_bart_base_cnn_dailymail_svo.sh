@@ -1,3 +1,7 @@
+set -xv
+pip install wandb
+pip install spacy
+pip install nltk
 wandb login 7e02057ca7216a04662368e6c2ee2eb4358b7762
 accelerate launch --multi_gpu run_summarization_no_trainer.py \
     --model_name_or_path facebook/bart-base \
