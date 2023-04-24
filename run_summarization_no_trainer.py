@@ -636,6 +636,7 @@ def main():
     def preprocess_function(examples):
         inputs = examples[text_column]
         targets = examples[summary_column]
+        targets = [x.replace("\n", " ") for x in targets]
         inputs = [prefix + inp for inp in inputs]
         model_inputs = tokenizer(inputs, max_length=args.max_source_length, padding=padding, truncation=True)
 
@@ -657,48 +658,48 @@ def main():
             model_inputs["ext_rouge2_labels"] = get_batch_sailent_scores_rouge2(model_inputs["input_ids"], model_inputs["labels"])
         return model_inputs
 
-    def batch_map_subject_verb_obj(examples):
-        import spacy
-        from nltk.tokenize import sent_tokenize
-        # Load the parser
-        nlp = spacy.load('en_core_web_sm')
-
-        def get_first_subject_verb_object(sentence):
-            """
-            Extracts subject, verb and object from sentence using spaCy dependency parser.
-            """
-            # Parse the sentence
-            doc = nlp(sentence)
-
-            # Extract subject, verb and object
-            subject = ""
-            verb = ""
-            obj = ""
-
-            for token in doc:
-                if 'subj' in token.dep_ and not subject:
-                    subject = token.text
-                elif 'obj' in token.dep_ and not obj:
-                    obj = token.text
-                elif 'ROOT' in token.dep_ and not verb:
-                    verb = token.text
-
-            return subject, verb, obj
-
-        def get_subject_verb_obj_new_label(sents):
-            subjects, verbs, objs = [], [], []
-            for sent in sent_tokenize(sents):
-                subject, verb, obj = get_first_subject_verb_object(sent)
-                subjects.append(subject)
-                verbs.append(verb)
-                objs.append(obj)
-            res = f"Subject: {' '.join(subjects)} Verb: {' '.join(verbs)} Object: {' '.join(objs)} {tokenizer.special_tokens_map['additional_special_tokens'][-1]} {sents}"
-            return res
-
-        summarys = []
-        for summary in examples[summary_column]:
-            summarys.append(get_subject_verb_obj_new_label(summary).replace("\n", " "))
-        return {summary_column: summarys}
+    # def batch_map_subject_verb_obj(examples):
+    #     import spacy
+    #     from nltk.tokenize import sent_tokenize
+    #     # Load the parser
+    #     nlp = spacy.load('en_core_web_sm')
+    #
+    #     def get_first_subject_verb_object(sentence):
+    #         """
+    #         Extracts subject, verb and object from sentence using spaCy dependency parser.
+    #         """
+    #         # Parse the sentence
+    #         doc = nlp(sentence)
+    #
+    #         # Extract subject, verb and object
+    #         subject = ""
+    #         verb = ""
+    #         obj = ""
+    #
+    #         for token in doc:
+    #             if 'subj' in token.dep_ and not subject:
+    #                 subject = token.text
+    #             elif 'obj' in token.dep_ and not obj:
+    #                 obj = token.text
+    #             elif 'ROOT' in token.dep_ and not verb:
+    #                 verb = token.text
+    #
+    #         return subject, verb, obj
+    #
+    #     def get_subject_verb_obj_new_label(sents):
+    #         subjects, verbs, objs = [], [], []
+    #         for sent in sent_tokenize(sents):
+    #             subject, verb, obj = get_first_subject_verb_object(sent)
+    #             subjects.append(subject)
+    #             verbs.append(verb)
+    #             objs.append(obj)
+    #         res = f"Subject: {' '.join(subjects)} Verb: {' '.join(verbs)} Object: {' '.join(objs)} {prompt_sep_token} {sents}"
+    #         return res
+    #
+    #     summarys = []
+    #     for summary in examples[summary_column]:
+    #         summarys.append(get_subject_verb_obj_new_label(summary))
+    #     return {summary_column: summarys}
 
     def batch_map_all_subject_verb_obj(examples):
         import spacy
@@ -738,7 +739,7 @@ def main():
             subjects = random.sample(subjects, min(len(subjects), 6))
             verbs = random.sample(verbs, min(len(verbs), 6))
             objs = random.sample(objs, min(len(objs), 6))
-            res = f"Subject: {' '.join(subjects)} Verb: {' '.join(verbs)} Object: {' '.join(objs)} {prompt_sep_token} {sents}"
+            res = f"Subjects: {','.join(subjects)}. Predicate: {','.join(verbs)}. Object: {','.join(objs)}. {prompt_sep_token} {sents}"
             return res
 
         summarys = []
@@ -748,9 +749,9 @@ def main():
 
     with accelerator.main_process_first():
         if args.decoder_prompt == "svo":
-            prompt_sep_token = "<s>"
+            prompt_sep_token = "Summary:"
             # tokenizer.add_special_tokens({"additional_special_tokens": [prompt_sep_token]})
-            prompt_sep_token_id = tokenizer.convert_tokens_to_ids(prompt_sep_token)
+            # prompt_sep_token_id = tokenizer.convert_tokens_to_ids(prompt_sep_token)
             raw_datasets = raw_datasets.map(
             batch_map_all_subject_verb_obj,
             batched=True,
@@ -1016,46 +1017,30 @@ def main():
                 if isinstance(generated_tokens, tuple):
                     generated_tokens = generated_tokens[0]
 
-                # todo: 把 0 换成每种 tokenizer 的 bos_token
-                if args.decoder_prompt == "svo":
-                    # def mask_prompt(x):
-                    #     mask = (x == prompt_sep_token_id).cumsum(dim=1) == 0
-                    #     x.masked_fill_(mask, 0)
-                    #     return x
-
-                    def mask_prompt(tensor):
-                        for i in range(tensor.shape[0]):
-                            zero_count = 0
-                            for j in range(tensor.shape[1]):
-                                if tensor[i][j] == 0:
-                                    zero_count += 1
-                                    if zero_count == 2:
-                                        break
-                                else:
-                                    tensor[i][j] = 0
-
-                        return tensor
-
-                    if debug_flag:
-                        raw_decoded_preds = tokenizer.batch_decode(generated_tokens)
-                        raw_decoded_labels = tokenizer.batch_decode(labels)
-                        accelerator.print(f"==============epoch {epoch} raw_decoded_preds==============", file=debug_file)
-                        accelerator.print(raw_decoded_preds, file=debug_file)
-                        accelerator.print(f"==============epoch {epoch} raw_decoded_labels==============", file=debug_file)
-                        accelerator.print(raw_decoded_labels, file=debug_file)
-                    generated_tokens = mask_prompt(generated_tokens)
-                    labels = mask_prompt(labels)
-
                 decoded_preds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
                 decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
 
                 decoded_preds, decoded_labels = postprocess_text(decoded_preds, decoded_labels)
                 if debug_flag:
-                    accelerator.print(f"==============epoch {epoch} decoded_preds==============", file=debug_file)
+                    accelerator.print(f"==============epoch {epoch} raw_decoded_preds==============", file=debug_file)
                     accelerator.print(decoded_preds, file=debug_file)
-                    accelerator.print(f"==============epoch {epoch} decoded_labels==============", file=debug_file)
+                    accelerator.print(f"==============epoch {epoch} raw_decoded_labels==============", file=debug_file)
                     accelerator.print(decoded_labels, file=debug_file)
-                    debug_flag -= 1
+                    debug_file.flush()
+                if args.decoder_prompt == "svo":
+                    def mask_svo(t):
+                        pos = t.find(prompt_sep_token)
+                        return t[pos if pos != -1 else 0:]
+
+                    decoded_preds = [mask_svo(x) for x in decoded_preds]
+                    decoded_labels = [mask_svo(x) for x in decoded_labels]
+                    if debug_flag:
+                        accelerator.print(f"==============epoch {epoch} decoded_preds==============", file=debug_file)
+                        accelerator.print(decoded_preds, file=debug_file)
+                        accelerator.print(f"==============epoch {epoch} decoded_labels==============", file=debug_file)
+                        accelerator.print(decoded_labels, file=debug_file)
+                        debug_file.flush()
+                        debug_flag -= 1
 
                 metric.add_batch(
                     predictions=decoded_preds,
