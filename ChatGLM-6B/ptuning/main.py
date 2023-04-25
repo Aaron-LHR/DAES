@@ -23,10 +23,11 @@ import os
 import sys
 import json
 
+import evaluate
 import numpy as np
 from datasets import load_dataset
 import jieba 
-from rouge_chinese import Rouge
+# from rouge_chinese import Rouge
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 import torch
 
@@ -106,8 +107,8 @@ def main():
 
     # Load pretrained model and tokenizer
     config = AutoConfig.from_pretrained(model_args.model_name_or_path, trust_remote_code=True)
-    config.pre_seq_len = model_args.pre_seq_len
-    config.prefix_projection = model_args.prefix_projection
+    config.pre_seq_len = model_args.pre_seq_len # todo
+    config.prefix_projection = model_args.prefix_projection # todo
 
     tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, trust_remote_code=True)
 
@@ -124,10 +125,10 @@ def main():
     else:
         model = AutoModel.from_pretrained(model_args.model_name_or_path, config=config, trust_remote_code=True)
 
-    if model_args.quantization_bit is not None:
+    if model_args.quantization_bit is not None: # todo
         print(f"Quantized to {model_args.quantization_bit} bit")
         model = model.quantize(model_args.quantization_bit)
-    if model_args.pre_seq_len is not None:
+    if model_args.pre_seq_len is not None: # todo
         # P-tuning v2
         model = model.half()
         model.transformer.prefix_encoder.float()
@@ -305,6 +306,7 @@ def main():
     )
 
     # Metric
+    metric = evaluate.load("rouge")
     def compute_metrics(eval_preds):
         preds, labels = eval_preds
         if isinstance(preds, tuple):
@@ -315,27 +317,35 @@ def main():
             labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
         decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
 
-        score_dict = {
-            "rouge-1": [],
-            "rouge-2": [],
-            "rouge-l": [],
-            "bleu-4": []
-        }
-        for pred, label in zip(decoded_preds, decoded_labels):
-            hypothesis = list(jieba.cut(pred))
-            reference = list(jieba.cut(label))
-            rouge = Rouge()
-            scores = rouge.get_scores(' '.join(hypothesis) , ' '.join(reference))
-            result = scores[0]
-            
-            for k, v in result.items():
-                score_dict[k].append(round(v["f"] * 100, 4))
-            bleu_score = sentence_bleu([list(label)], list(pred), smoothing_function=SmoothingFunction().method3)
-            score_dict["bleu-4"].append(round(bleu_score * 100, 4))
+        # score_dict = {
+        #     "rouge-1": [],
+        #     "rouge-2": [],
+        #     "rouge-l": [],
+        #     "bleu-4": []
+        # }
 
-        for k, v in score_dict.items():
-            score_dict[k] = float(np.mean(v))
-        return score_dict
+        for pred, label in zip(decoded_preds, decoded_labels):
+            metric.add_batch(
+                predictions=[pred],
+                references=[label],
+            )
+        #     hypothesis = list(jieba.cut(pred))
+        #     reference = list(jieba.cut(label))
+        #     rouge = Rouge()
+        #     scores = rouge.get_scores(' '.join(hypothesis) , ' '.join(reference))
+        #     result = scores[0]
+        #
+        #     for k, v in result.items():
+        #         score_dict[k].append(round(v["f"] * 100, 4))
+        #     bleu_score = sentence_bleu([list(label)], list(pred), smoothing_function=SmoothingFunction().method3)
+        #     score_dict["bleu-4"].append(round(bleu_score * 100, 4))
+        #
+        # for k, v in score_dict.items():
+        #     score_dict[k] = float(np.mean(v))
+        result = metric.compute(use_stemmer=True)
+        result = {k: round(v * 100, 4) for k, v in result.items()}
+        # return score_dict
+        return result
 
     # Override the decoding parameters of Seq2SeqTrainer
     training_args.generation_max_length = (
