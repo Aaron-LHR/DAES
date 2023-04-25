@@ -1,2 +1,2 @@
-pip install -r requirement.txt
-pip install en_core_web_sm-3.5.0.tar.gz
+pip install -r requirements.txt -i http://mirrors.aliyun.com/pypi/simple --trusted-host mirrors.aliyun.com
+pip install en_core_web_sm-3.5.0.tar.gz -i http://mirrors.aliyun.com/pypi/simple --trusted-host mirrors.aliyun.com
