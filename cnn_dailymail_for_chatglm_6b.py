@@ -1,7 +1,5 @@
 import datasets
 from datasets import load_dataset
-dataset = load_dataset("cnn_dailymail", '3.0.0')
-dataset
 
 
 def batch_map_all_subject_verb_obj(examples):
@@ -53,18 +51,19 @@ def batch_map_all_subject_verb_obj(examples):
         summarys.append(get_subject_verb_obj_new_label(summary))
     return {summary_column: summarys}
 
+if __name__ == '__main__':
+    dataset = load_dataset("cnn_dailymail", '3.0.0')
+    sub_dataset = dataset.map(batch_map_all_subject_verb_obj, batched=True, num_proc=15)
 
-sub_dataset = dataset.map(batch_map_all_subject_verb_obj, batched=True, num_proc=15)
 
+    import json
 
-import json
+    out = open("ChatGLM-6B\ptuning\data\cnn_dailymail_svo_train.json", "w", encoding="utf-8")
+    for item in sub_dataset["train"]:
+        out.write(json.dumps({"article": item["article"], "highlights": item["highlights"].replace("\n", " ")}) + "\n")
+    out.close()
 
-out = open("ChatGLM-6B\ptuning\data\cnn_dailymail_svo_train.json", "w", encoding="utf-8")
-for item in sub_dataset["train"]:
-    out.write(json.dumps({"article": item["article"], "highlights": item["highlights"].replace("\n", " ")}) + "\n")
-out.close()
-
-out = open("ChatGLM-6B\ptuning\data\cnn_dailymail_svo_test.json", "w", encoding="utf-8")
-for item in sub_dataset["test"]:
-    out.write(json.dumps({"article": item["article"], "highlights": item["highlights"].replace("\n", " ")}) + "\n")
-out.close()
+    out = open("ChatGLM-6B\ptuning\data\cnn_dailymail_svo_test.json", "w", encoding="utf-8")
+    for item in sub_dataset["test"]:
+        out.write(json.dumps({"article": item["article"], "highlights": item["highlights"].replace("\n", " ")}) + "\n")
+    out.close()
