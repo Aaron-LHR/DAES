@@ -16,7 +16,7 @@ CUDA_VISIBLE_DEVICES=1,2 python -m torch.distributed.launch --nproc_per_node=2 m
     --gradient_accumulation_steps 4 \
     --predict_with_generate \
     --num_train_epochs 5 \
-    --logging_steps 10 \
+    --logging_steps 1000 \
     --save_steps 1000 \
     --learning_rate 2e-2 \
     --pre_seq_len 128 \
