@@ -325,6 +325,13 @@ def main():
         # }
 
         for pred, label in zip(decoded_preds, decoded_labels):
+            def mask_svo(t):
+                prompt_sep_token = "Summary:"
+                pos = t.find(prompt_sep_token)
+                return t[(pos + len(prompt_sep_token)) if pos != -1 else 0:].strip()
+
+            pred = mask_svo(pred)
+            label = mask_svo(label)
             metric.add_batch(
                 predictions=[pred],
                 references=[label],
