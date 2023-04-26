@@ -307,7 +307,10 @@ def main():
 
     # Metric
     metric = evaluate.load("rouge")
+    debug_flag = 1
+    debug_file = open(f"log_{training_args.local_rank}", "w", encoding="utf-8")
     def compute_metrics(eval_preds):
+        global debug_flag
         preds, labels = eval_preds
         if isinstance(preds, tuple):
             preds = preds[0]
@@ -330,8 +333,19 @@ def main():
                 pos = t.find(prompt_sep_token)
                 return t[(pos + len(prompt_sep_token)) if pos != -1 else 0:].strip()
 
+            if debug_flag > 0:
+                print(f"==============raw_decoded_preds==============", file=debug_file)
+                print(pred, file=debug_file)
+                print(f"==============raw_decoded_labels==============", file=debug_file)
+                print(label, file=debug_file)
             pred = mask_svo(pred)
             label = mask_svo(label)
+            if debug_flag > 0:
+                print(f"==============decoded_preds==============", file=debug_file)
+                print(pred, file=debug_file)
+                print(f"==============decoded_labels==============", file=debug_file)
+                print(label, file=debug_file)
+                debug_flag -= 1
             metric.add_batch(
                 predictions=[pred],
                 references=[label],
