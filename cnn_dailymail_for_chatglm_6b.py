@@ -52,9 +52,11 @@ def batch_map_all_subject_verb_obj(examples):
     return {summary_column: summarys}
 
 if __name__ == '__main__':
+    print("begin load!")
     dataset = load_dataset("cnn_dailymail", '3.0.0')
+    print("load done!")
     sub_dataset = dataset.map(batch_map_all_subject_verb_obj, batched=True, num_proc=15)
-
+    print("map done!")
 
     import json
 
