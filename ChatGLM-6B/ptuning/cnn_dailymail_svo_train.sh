@@ -15,7 +15,8 @@ python main.py \
     --per_device_eval_batch_size 8 \
     --gradient_accumulation_steps 2 \
     --predict_with_generate \
-    --num_train_epochs 5 \
+    --gpus 1,2 \
+     --max_epochs 5 \
     --logging_steps 10 \
     --save_steps 1000 \
     --learning_rate 2e-2 \
