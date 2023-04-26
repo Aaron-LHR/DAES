@@ -737,10 +737,10 @@ def main():
                 subjects.extend(subject)
                 verbs.extend(verb)
                 objs.extend(obj)
-            subjects = random.sample(subjects, min(len(subjects), 6))
-            verbs = random.sample(verbs, min(len(verbs), 6))
-            objs = random.sample(objs, min(len(objs), 6))
-            res = f"Subjects: {','.join(subjects)}. Predicate: {','.join(verbs)}. Object: {','.join(objs)}. {prompt_sep_token} {sents}"
+            # subjects = random.sample(subjects, min(len(subjects), 6))
+            # verbs = random.sample(verbs, min(len(verbs), 6))
+            # objs = random.sample(objs, min(len(objs), 6))
+            res = f"Subjects: {', '.join(subjects)}. Predicates: {', '.join(verbs)}. Objects: {', '.join(objs)}. {prompt_sep_token} {sents}"
             return res
 
         summarys = []
@@ -1031,7 +1031,7 @@ def main():
                 if args.decoder_prompt == "svo":
                     def mask_svo(t):
                         pos = t.find(prompt_sep_token)
-                        return t[pos if pos != -1 else 0:]
+                        return t[(pos + len(prompt_sep_token)) if pos != -1 else 0:].strip()
 
                     decoded_preds = [mask_svo(x) for x in decoded_preds]
                     decoded_labels = [mask_svo(x) for x in decoded_labels]
