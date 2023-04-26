@@ -1,4 +1,4 @@
-python main.py \
+CUDA_VISIBLE_DEVICES=1,2 python -m torch.distributed.launch --nproc_per_node=2 python main.py \
     --do_train \
     --do_eval \
     --train_file data/cnn_dailymail_svo_train.json \
@@ -15,8 +15,7 @@ python main.py \
     --per_device_eval_batch_size 8 \
     --gradient_accumulation_steps 2 \
     --predict_with_generate \
-    --gpus 1,2 \
-     --max_epochs 5 \
+    --num_train_epochs 5 \
     --logging_steps 10 \
     --save_steps 1000 \
     --learning_rate 2e-2 \
