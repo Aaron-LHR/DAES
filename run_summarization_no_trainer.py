@@ -734,9 +734,9 @@ def main():
             subjects, verbs, objs = [], [], []
             for sent in sent_tokenize(sents):
                 subject, verb, obj = get_all_subject_verb_object(sent)
-                subjects.extend(subject)
-                verbs.extend(verb)
-                objs.extend(obj)
+                subjects.extend(subject[:2])
+                verbs.extend(verb[:2])
+                objs.extend(obj[:2])
             # subjects = random.sample(subjects, min(len(subjects), 6))
             # verbs = random.sample(verbs, min(len(verbs), 6))
             # objs = random.sample(objs, min(len(objs), 6))
