@@ -1,4 +1,4 @@
-accelerate launch --multi_gpu --gpu_ids "2,3" run_summarization_no_trainer.py \
+accelerate launch --multi_gpu --gpu_ids "1,2" run_summarization_no_trainer.py \
     --model_name_or_path google/flan-t5-xxl \
     --dataset_name cnn_dailymail \
     --dataset_config "3.0.0" \
