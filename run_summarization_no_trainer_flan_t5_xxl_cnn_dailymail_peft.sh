@@ -1,4 +1,4 @@
-CUDA_VISIBLE_DEVICES=1,2, ccelerate launch run_summarization_no_trainer.py \
+CUDA_VISIBLE_DEVICES=1,2 accelerate launch run_summarization_no_trainer.py \
     --model_name_or_path google/flan-t5-xxl \
     --dataset_name cnn_dailymail \
     --dataset_config "3.0.0" \
