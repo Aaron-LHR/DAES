@@ -1,5 +1,5 @@
 CUDA_VISIBLE_DEVICES=1,2 accelerate launch run_summarization_no_trainer.py \
-    --model_name_or_path google/flan-t5-xxl \
+    --model_name_or_path philschmid/flan-t5-xxl-sharded-fp16 \
     --dataset_name cnn_dailymail \
     --dataset_config "3.0.0" \
     --output_dir model/flan-t5-xxl_cnn-dailymail \
