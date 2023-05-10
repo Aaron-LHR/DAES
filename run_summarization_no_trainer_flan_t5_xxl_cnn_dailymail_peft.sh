@@ -3,8 +3,8 @@ CUDA_VISIBLE_DEVICES=1,2 accelerate launch run_summarization_no_trainer.py \
     --dataset_name cnn_dailymail \
     --dataset_config "3.0.0" \
     --output_dir model/flan-t5-xxl_cnn-dailymail \
-    --per_device_train_batch_size 14 \
-    --per_device_eval_batch_size 14 \
+    --per_device_train_batch_size 4 \
+    --per_device_eval_batch_size 4 \
     --learning_rate 3e-5 \
     --num_train_epochs 10 \
     --lr_scheduler_type linear \
