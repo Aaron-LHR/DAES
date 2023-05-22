@@ -6,12 +6,12 @@ accelerate launch run_summarization_no_trainer.py ^
     --per_device_train_batch_size 4 ^
     --per_device_eval_batch_size 4 ^
     --gradient_accumulation_steps 4^
-    --learning_rate 1e-5 ^
+    --learning_rate 6e-5 ^
     --num_train_epochs 5 ^
     --lr_scheduler_type linear ^
     --num_warmup_steps 1000 ^
     --weight_decay 0.01 ^
-    --seed 42 ^
+    --seed 1111 ^
     --checkpointing_steps epoch ^
     --max_target_length 256 ^
     --num_beams 4 ^
