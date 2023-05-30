@@ -324,6 +324,12 @@ def parse_args():
         help="decoder prompt options.",
     )
     parser.add_argument(
+        "--encoder_prompt",
+        type=str,
+        default=None,
+        help="encoder prompt options.",
+    )
+    parser.add_argument(
         "--test",
         action="store_true",
         help="Only do test",
@@ -639,6 +645,28 @@ def main():
             batch_scores.append(article_scores)
         return batch_scores
 
+    def get_knn_prompt_article(example):
+        from nltk.tokenize import sent_tokenize
+        article_sents = sent_tokenize(example['article'])
+        highlights_sents = sent_tokenize(example['highlights'])
+        if len(highlights_sents) == 1:
+            highlights_sents = sent_tokenize(example['highlights'].replace("\n", ". "))
+        if len(highlights_sents) == 1:
+            highlights_sents = sent_tokenize(example['highlights'].replace("  ", ". "))
+
+        from rouge_score import rouge_scorer
+        scorer = rouge_scorer.RougeScorer(['rouge2'], use_stemmer=True)
+        for i, article_sent in enumerate(article_sents):
+            rouges = []
+            for j, highlights_sent in enumerate(highlights_sents):
+                score = scorer.score(highlights_sent, article_sent)["rouge2"].fmeasure
+                rouges.append((j + 1, score))
+            rouges = sorted(rouges, key=lambda x: x[1], reverse=True)
+            if rouges[0][1] > 0:
+                article_sents[i] = f'[{rouges[0][0]}] {article_sents[i]} [/{rouges[0][0]}]'
+        example['article'] = ' '.join(article_sents)
+        return example
+
     def preprocess_function(examples):
         inputs = examples[text_column]
         targets = examples[summary_column]
@@ -764,6 +792,14 @@ def main():
             num_proc=args.preprocessing_num_workers,
             load_from_cache_file=True,
             desc="Running svo on dataset",
+        )
+
+        if args.encoder_prompt == "knn":
+            raw_datasets = raw_datasets.map(
+            get_knn_prompt_article,
+            num_proc=args.preprocessing_num_workers,
+            load_from_cache_file=True,
+            desc="Running knn prompt on dataset",
         )
 
         processed_datasets = raw_datasets.map(
