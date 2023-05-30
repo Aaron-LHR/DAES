@@ -324,6 +324,11 @@ def parse_args():
         help="decoder prompt options.",
     )
     parser.add_argument(
+        "--test",
+        action="store_true",
+        help="Only do test",
+    )
+    parser.add_argument(
         "--with_tracking",
         action="store_true",
         help="Whether to enable experiment trackers for logging.",
@@ -871,6 +876,8 @@ def main():
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
     # Afterwards we recalculate our number of training epochs
     args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
+    if args.test:
+        args.num_train_epochs = 1
 
     # Figure out how many steps we should save the Accelerator states
     checkpointing_steps = args.checkpointing_steps
@@ -925,63 +932,63 @@ def main():
             resume_step -= starting_epoch * len(train_dataloader)
     debug_file = open("log", "w", encoding="utf-8")
     for epoch in range(starting_epoch, args.num_train_epochs):
-        model.train()
-        if args.with_tracking:
-            total_loss = 0
-            total_ext_rouge1_loss = 0
-            total_ext_rouge2_loss = 0
-        for step, batch in enumerate(train_dataloader):
-            # We need to skip steps until we reach the resumed step
-            if args.resume_from_checkpoint and epoch == starting_epoch:
-                if resume_step is not None and step < resume_step:
+        if not args.test:
+            model.train()
+            if args.with_tracking:
+                total_loss = 0
+                total_ext_rouge1_loss = 0
+                total_ext_rouge2_loss = 0
+            for step, batch in enumerate(train_dataloader):
+                # We need to skip steps until we reach the resumed step
+                if args.resume_from_checkpoint and epoch == starting_epoch:
+                    if resume_step is not None and step < resume_step:
+                        completed_steps += 1
+                        continue
+
+                with accelerator.accumulate(model):
+                    outputs = model(**batch)
+                    if args.model_type == "BartForConditionalGenerationWithRouge1":
+                        abs_loss = outputs.loss
+                        masked_ext_rouge1_loss = outputs.masked_ext_rouge1_loss
+                        # We keep track of the loss at each epoch
+                        if args.with_tracking:
+                            total_loss += abs_loss.detach().float()
+                            total_ext_rouge1_loss += masked_ext_rouge1_loss.detach().float()
+                        loss = abs_loss + masked_ext_rouge1_loss
+                    elif args.model_type == "BartForConditionalGenerationWithRouge1Rouge2":
+                        abs_loss = outputs.loss
+                        masked_ext_rouge1_loss = outputs.masked_ext_rouge1_loss
+                        masked_ext_rouge2_loss = outputs.masked_ext_rouge2_loss
+                        # We keep track of the loss at each epoch
+                        if args.with_tracking:
+                            total_loss += abs_loss.detach().float()
+                            total_ext_rouge1_loss += masked_ext_rouge1_loss.detach().float()
+                            total_ext_rouge2_loss += masked_ext_rouge2_loss.detach().float()
+                        loss = abs_loss + masked_ext_rouge1_loss + masked_ext_rouge2_loss
+                    else:
+                        loss = outputs.loss
+                        # We keep track of the loss at each epoch
+                        if args.with_tracking:
+                            total_loss += loss.detach().float()
+                    accelerator.backward(loss)
+                    optimizer.step()
+                    lr_scheduler.step()
+                    optimizer.zero_grad()
+
+                # Checks if the accelerator has performed an optimization step behind the scenes
+                if accelerator.sync_gradients:
+                    progress_bar.update(1)
                     completed_steps += 1
-                    continue
 
-            with accelerator.accumulate(model):
-                outputs = model(**batch)
-                if args.model_type == "BartForConditionalGenerationWithRouge1":
-                    abs_loss = outputs.loss
-                    masked_ext_rouge1_loss = outputs.masked_ext_rouge1_loss
-                    # We keep track of the loss at each epoch
-                    if args.with_tracking:
-                        total_loss += abs_loss.detach().float()
-                        total_ext_rouge1_loss += masked_ext_rouge1_loss.detach().float()
-                    loss = abs_loss + masked_ext_rouge1_loss
-                elif args.model_type == "BartForConditionalGenerationWithRouge1Rouge2":
-                    abs_loss = outputs.loss
-                    masked_ext_rouge1_loss = outputs.masked_ext_rouge1_loss
-                    masked_ext_rouge2_loss = outputs.masked_ext_rouge2_loss
-                    # We keep track of the loss at each epoch
-                    if args.with_tracking:
-                        total_loss += abs_loss.detach().float()
-                        total_ext_rouge1_loss += masked_ext_rouge1_loss.detach().float()
-                        total_ext_rouge2_loss += masked_ext_rouge2_loss.detach().float()
-                    loss = abs_loss + masked_ext_rouge1_loss + masked_ext_rouge2_loss
-                else:
-                    loss = outputs.loss
-                    # We keep track of the loss at each epoch
-                    if args.with_tracking:
-                        total_loss += loss.detach().float()
-                accelerator.backward(loss)
-                optimizer.step()
-                lr_scheduler.step()
-                optimizer.zero_grad()
+                if isinstance(checkpointing_steps, int):
+                    if completed_steps % checkpointing_steps == 0:
+                        output_dir = f"step_{completed_steps }"
+                        if args.output_dir is not None:
+                            output_dir = os.path.join(args.output_dir, output_dir)
+                        accelerator.save_state(output_dir)
 
-            # Checks if the accelerator has performed an optimization step behind the scenes
-            if accelerator.sync_gradients:
-                progress_bar.update(1)
-                completed_steps += 1
-
-            if isinstance(checkpointing_steps, int):
-                if completed_steps % checkpointing_steps == 0:
-                    output_dir = f"step_{completed_steps }"
-                    if args.output_dir is not None:
-                        output_dir = os.path.join(args.output_dir, output_dir)
-                    accelerator.save_state(output_dir)
-
-            if completed_steps >= args.max_train_steps:
-                break
-
+                if completed_steps >= args.max_train_steps:
+                    break
         model.eval()
         if args.val_max_target_length is None:
             args.val_max_target_length = args.max_target_length
@@ -991,7 +998,7 @@ def main():
             "num_beams": args.num_beams,
         }
         debug_flag = 1
-        accelerator.print("eval!!!!!")
+        accelerator.print("eval" + "!" * 1000)
         for step, batch in tqdm(enumerate(eval_dataloader), total=len(eval_dataloader)):
             with torch.no_grad():
                 generated_tokens = accelerator.unwrap_model(model).generate(
@@ -1092,7 +1099,8 @@ def main():
         logger.info(result)
 
         if args.with_tracking:
-            result["train_loss"] = total_loss.item() / len(train_dataloader)  # 生成式loss
+            if not args.test:
+                result["train_loss"] = total_loss.item() / len(train_dataloader)  # 生成式loss
             result["epoch"] = epoch
             result["step"] = completed_steps
             if args.model_type == "BartForConditionalGenerationWithRouge1":
