@@ -15,6 +15,6 @@ accelerate launch run_summarization_no_trainer.py \
     --max_target_length 256 \
     --num_beams 4 \
     --preprocessing_num_workers 20 \
-    --encoder_prompt knn \
+    --encoder_prompt rouge_knn \
     --with_tracking \
     --report_to wandb

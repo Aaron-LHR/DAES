@@ -794,7 +794,7 @@ def main():
             desc="Running svo on dataset",
         )
 
-        if args.encoder_prompt == "knn":
+        if args.encoder_prompt == "rouge_knn":
             raw_datasets = raw_datasets.map(
             get_knn_prompt_article,
             num_proc=args.preprocessing_num_workers,
@@ -1084,7 +1084,8 @@ def main():
                         accelerator.print(f"==============epoch {epoch} decoded_labels==============", file=debug_file)
                         accelerator.print(decoded_labels, file=debug_file)
                         debug_file.flush()
-                        debug_flag -= 1
+                if debug_flag:
+                    debug_flag -= 1
 
                 metric.add_batch(
                     predictions=decoded_preds,
