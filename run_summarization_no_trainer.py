@@ -25,9 +25,9 @@ import math
 import os
 from collections import defaultdict, Counter
 import platform
-if "Windows" in platform.system() or "windows" in platform.system():
-    os.environ["http_proxy"] = "http://127.0.0.1:7890"
-    os.environ["https_proxy"] = "http://127.0.0.1:7890"
+# if "Windows" in platform.system() or "windows" in platform.system():
+#     os.environ["http_proxy"] = "http://127.0.0.1:7890"
+#     os.environ["https_proxy"] = "http://127.0.0.1:7890"
 import random
 from pathlib import Path
 
@@ -645,7 +645,7 @@ def main():
             batch_scores.append(article_scores)
         return batch_scores
 
-    def get_knn_prompt_article(example):
+    def get_rouge_prompt_article(example):
         from nltk.tokenize import sent_tokenize
         article_sents = sent_tokenize(example['article'])
         highlights_sents = sent_tokenize(example['highlights'])
@@ -692,48 +692,56 @@ def main():
             model_inputs["ext_rouge2_labels"] = get_batch_sailent_scores_rouge2(model_inputs["input_ids"], model_inputs["labels"])
         return model_inputs
 
-    # def batch_map_subject_verb_obj(examples):
-    #     import spacy
-    #     from nltk.tokenize import sent_tokenize
-    #     # Load the parser
-    #     nlp = spacy.load('en_core_web_sm')
-    #
-    #     def get_first_subject_verb_object(sentence):
-    #         """
-    #         Extracts subject, verb and object from sentence using spaCy dependency parser.
-    #         """
-    #         # Parse the sentence
-    #         doc = nlp(sentence)
-    #
-    #         # Extract subject, verb and object
-    #         subject = ""
-    #         verb = ""
-    #         obj = ""
-    #
-    #         for token in doc:
-    #             if 'subj' in token.dep_ and not subject:
-    #                 subject = token.text
-    #             elif 'obj' in token.dep_ and not obj:
-    #                 obj = token.text
-    #             elif 'ROOT' in token.dep_ and not verb:
-    #                 verb = token.text
-    #
-    #         return subject, verb, obj
-    #
-    #     def get_subject_verb_obj_new_label(sents):
-    #         subjects, verbs, objs = [], [], []
-    #         for sent in sent_tokenize(sents):
-    #             subject, verb, obj = get_first_subject_verb_object(sent)
-    #             subjects.append(subject)
-    #             verbs.append(verb)
-    #             objs.append(obj)
-    #         res = f"Subject: {' '.join(subjects)} Verb: {' '.join(verbs)} Object: {' '.join(objs)} {prompt_sep_token} {sents}"
-    #         return res
-    #
-    #     summarys = []
-    #     for summary in examples[summary_column]:
-    #         summarys.append(get_subject_verb_obj_new_label(summary))
-    #     return {summary_column: summarys}
+    def cluster_prompt(batch, outputs):
+        from sklearn.cluster import KMeans
+        from nltk.tokenize import sent_tokenize
+        encoder_last_hidden_state = outputs.encoder_last_hidden_state
+        articles = tokenizer.batch_decode(batch.input_ids, skip_special_tokens=True)
+        for article_index, article in enumerate(articles):
+            sents = sent_tokenize(article)
+            kmeans = KMeans(n_clusters=3)
+            embeddings = []
+            start_position = 1
+            for sent in sents:
+                # print(sent)
+                sent = ' ' + sent
+                sent_len = len(tokenizer(sent).input_ids) - 2
+                sentence_embedding = encoder_last_hidden_state[article_index, start_position: start_position + sent_len]
+                # if torch.any(torch.isnan(sentence_embedding)).item():
+                #     break
+                embeddings.append(torch.mean(sentence_embedding, dim=0))
+                accelerator.print('sentence_embedding')
+                accelerator.print(sentence_embedding)
+                accelerator.print(sentence_embedding.size())
+                accelerator.print(sent)
+                accelerator.print(tokenizer(sent).input_ids)
+                accelerator.print(sent_len)
+                accelerator.print(batch.input_ids[article_index, start_position: start_position + sent_len])
+                accelerator.print(tokenizer.decode(batch.input_ids[article_index, start_position: start_position + sent_len], skip_special_tokens=False))
+                start_position += sent_len
+            embeddings = torch.stack(embeddings)
+            # print(embeddings.shape)
+            np_emb = embeddings.cpu().detach().numpy()
+            try:
+                kmeans = kmeans.fit(np_emb)
+            except:
+                accelerator.print(batch.input_ids[article_index])
+                accelerator.print(np_emb)
+                accelerator.print(embeddings)
+                accelerator.print(encoder_last_hidden_state[article_index, : start_position])
+            # km_labels = km.labels_
+            # print(km_labels)
+            for n_cluster_index in range(kmeans.n_clusters):
+                distances = kmeans.transform(np_emb)[:, n_cluster_index]
+                # print(len([closest_i for closest_i in np.argsort(distances) if kmeans.labels_[closest_i] == n_cluster_index]))
+                # closest = [closest_i for closest_i in np.argsort(distances) if kmeans.labels_[closest_i] == n_cluster_index][:3]
+                closest = np.argsort(distances)[:3]
+                for center_sent_index in closest:
+                    sents[
+                        center_sent_index] = f'[{n_cluster_index + 1}] {sents[center_sent_index]} [/{n_cluster_index + 1}]'
+            article = ' '.join(sents)
+            articles[article_index] = article
+        return articles
 
     def batch_map_all_subject_verb_obj(examples):
         import spacy
@@ -794,9 +802,9 @@ def main():
             desc="Running svo on dataset",
         )
 
-        if args.encoder_prompt == "rouge_knn":
+        if args.encoder_prompt == "rouge":
             raw_datasets = raw_datasets.map(
-            get_knn_prompt_article,
+            get_rouge_prompt_article,
             num_proc=args.preprocessing_num_workers,
             load_from_cache_file=True,
             desc="Running knn prompt on dataset",
@@ -983,6 +991,17 @@ def main():
 
                 with accelerator.accumulate(model):
                     outputs = model(**batch)
+
+                    if args.encoder_prompt == "kmeans":
+                        inputs = cluster_prompt(batch, outputs)
+                        inputs = [prefix + inp for inp in inputs]
+                        model_inputs = [tokenizer(input_, max_length=args.max_source_length, padding=padding, truncation=True) for input_ in inputs]
+                        features = data_collator(model_inputs)
+                        for key in ['input_ids', 'attention_mask']:
+                            batch[key] = features[key]
+                        batch = batch.to(accelerator.device)
+                        outputs = model(**batch)
+
                     if args.model_type == "BartForConditionalGenerationWithRouge1":
                         abs_loss = outputs.loss
                         masked_ext_rouge1_loss = outputs.masked_ext_rouge1_loss
@@ -1037,6 +1056,18 @@ def main():
         accelerator.print("eval" + "!" * 1000)
         for step, batch in tqdm(enumerate(eval_dataloader), total=len(eval_dataloader)):
             with torch.no_grad():
+
+                if args.encoder_prompt == "kmeans":
+                    outputs = model(**batch)
+                    inputs = cluster_prompt(batch, outputs)
+                    inputs = [prefix + inp for inp in inputs]
+                    model_inputs = [
+                        tokenizer(input_, max_length=args.max_source_length, padding=padding, truncation=True) for input_ in inputs]
+                    features = data_collator(model_inputs)
+                    for key in ['input_ids', 'attention_mask']:
+                        batch[key] = features[key]
+                    batch = batch.to(accelerator.device)
+
                 generated_tokens = accelerator.unwrap_model(model).generate(
                     batch["input_ids"],
                     attention_mask=batch["attention_mask"],
