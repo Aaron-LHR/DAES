@@ -710,27 +710,29 @@ def main():
                 # if torch.any(torch.isnan(sentence_embedding)).item():
                 #     break
                 embeddings.append(torch.mean(sentence_embedding, dim=0))
-                accelerator.print('sentence_embedding')
-                accelerator.print(sentence_embedding)
-                accelerator.print(sentence_embedding.size())
-                accelerator.print(sent)
-                accelerator.print(tokenizer(sent).input_ids)
-                accelerator.print(sent_len)
-                accelerator.print(batch.input_ids[article_index, start_position: start_position + sent_len])
-                accelerator.print(tokenizer.decode(batch.input_ids[article_index, start_position: start_position + sent_len], skip_special_tokens=False))
+                # accelerator.print('sentence_embedding')
+                # accelerator.print(sentence_embedding)
+                # accelerator.print(sentence_embedding.size())
+                # accelerator.print(sent)
+                # accelerator.print(tokenizer(sent).input_ids)
+                # accelerator.print(sent_len)
+                # accelerator.print(batch.input_ids[article_index, start_position: start_position + sent_len])
+                # accelerator.print(tokenizer.decode(batch.input_ids[article_index, start_position: start_position + sent_len], skip_special_tokens=False))
                 start_position += sent_len
             embeddings = torch.stack(embeddings)
             # print(embeddings.shape)
             np_emb = embeddings.cpu().detach().numpy()
-            try:
-                kmeans = kmeans.fit(np_emb)
-            except:
-                accelerator.print(batch.input_ids[article_index])
-                accelerator.print(np_emb)
-                accelerator.print(embeddings)
-                accelerator.print(encoder_last_hidden_state[article_index, : start_position])
+            # try:
+            kmeans = kmeans.fit(np_emb)
+            # except:
+            #     accelerator.print(batch.input_ids[article_index])
+            #     accelerator.print(np_emb)
+            #     accelerator.print(embeddings)
+            #     accelerator.print(encoder_last_hidden_state[article_index, : start_position])
+
             # km_labels = km.labels_
             # print(km_labels)
+
             for n_cluster_index in range(kmeans.n_clusters):
                 distances = kmeans.transform(np_emb)[:, n_cluster_index]
                 # print(len([closest_i for closest_i in np.argsort(distances) if kmeans.labels_[closest_i] == n_cluster_index]))
@@ -993,6 +995,7 @@ def main():
                     outputs = model(**batch)
 
                     if args.encoder_prompt == "kmeans":
+                        batch = batch.to('cpu')
                         inputs = cluster_prompt(batch, outputs)
                         inputs = [prefix + inp for inp in inputs]
                         model_inputs = [tokenizer(input_, max_length=args.max_source_length, padding=padding, truncation=True) for input_ in inputs]
@@ -1001,6 +1004,7 @@ def main():
                             batch[key] = features[key]
                         batch = batch.to(accelerator.device)
                         outputs = model(**batch)
+                        batch = batch.to('cpu')
 
                     if args.model_type == "BartForConditionalGenerationWithRouge1":
                         abs_loss = outputs.loss
@@ -1059,6 +1063,7 @@ def main():
 
                 if args.encoder_prompt == "kmeans":
                     outputs = model(**batch)
+                    batch = batch.to('cpu')
                     inputs = cluster_prompt(batch, outputs)
                     inputs = [prefix + inp for inp in inputs]
                     model_inputs = [
@@ -1081,6 +1086,7 @@ def main():
                 if not args.pad_to_max_length:
                     # If we did not pad to max length, we need to pad the labels too
                     labels = accelerator.pad_across_processes(batch["labels"], dim=1, pad_index=tokenizer.pad_token_id)
+                batch = batch.to('cpu')
 
                 generated_tokens, labels = accelerator.gather_for_metrics((generated_tokens, labels))
                 generated_tokens = generated_tokens.cpu().numpy()
