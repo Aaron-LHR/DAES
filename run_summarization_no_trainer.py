@@ -997,6 +997,7 @@ def main():
                     if args.encoder_prompt == "kmeans":
                         batch = batch.to('cpu')
                         inputs = cluster_prompt(batch, outputs)
+                        del outputs
                         inputs = [prefix + inp for inp in inputs]
                         model_inputs = [tokenizer(input_, max_length=args.max_source_length, padding=padding, truncation=True) for input_ in inputs]
                         features = data_collator(model_inputs)
@@ -1005,6 +1006,7 @@ def main():
                         batch = batch.to(accelerator.device)
                         outputs = model(**batch)
                         batch = batch.to('cpu')
+                        del batch
 
                     if args.model_type == "BartForConditionalGenerationWithRouge1":
                         abs_loss = outputs.loss
@@ -1065,6 +1067,7 @@ def main():
                     outputs = model(**batch)
                     batch = batch.to('cpu')
                     inputs = cluster_prompt(batch, outputs)
+                    del outputs
                     inputs = [prefix + inp for inp in inputs]
                     model_inputs = [
                         tokenizer(input_, max_length=args.max_source_length, padding=padding, truncation=True) for input_ in inputs]
@@ -1087,6 +1090,7 @@ def main():
                     # If we did not pad to max length, we need to pad the labels too
                     labels = accelerator.pad_across_processes(batch["labels"], dim=1, pad_index=tokenizer.pad_token_id)
                 batch = batch.to('cpu')
+                del batch
 
                 generated_tokens, labels = accelerator.gather_for_metrics((generated_tokens, labels))
                 generated_tokens = generated_tokens.cpu().numpy()
