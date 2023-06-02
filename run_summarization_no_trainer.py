@@ -30,7 +30,7 @@ import platform
 #     os.environ["https_proxy"] = "http://127.0.0.1:7890"
 import random
 from pathlib import Path
-
+from nltk.tokenize import sent_tokenize
 import datasets
 import nltk
 import numpy as np
@@ -38,7 +38,7 @@ import torch
 from datasets import load_dataset, concatenate_datasets
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
-
+import traceback
 import evaluate
 import transformers
 from accelerate import Accelerator
@@ -448,8 +448,9 @@ def main():
         # Downloading and loading a dataset from the hub.
         raw_datasets = load_dataset(args.dataset_name, args.dataset_config_name)
         if args.dataset_name == 'cnn_dailymail':
-            bad_ids = {"0405e4119ac6c1eb83bff8dcc69953a8691d737b"}
-            raw_datasets = raw_datasets.filter(lambda example: example['id'] not in bad_ids)
+            # bad_ids = {"0405e4119ac6c1eb83bff8dcc69953a8691d737b", '955008863d08cded65add156b2272222d233674a'}
+            # raw_datasets = raw_datasets.filter(lambda example: example['id'] not in bad_ids)
+            raw_datasets = raw_datasets.filter(lambda example: len(sent_tokenize(example['article'])) > 3)
     else:
         data_files = {}
         if args.train_file is not None:
@@ -670,8 +671,12 @@ def main():
         example['article'] = ' '.join(article_sents)
         return example
 
+    punctuations = [',', '.', ';', '"', "'", '?', '!', ':']
     def preprocess_function(examples):
         inputs = examples[text_column]
+        for punctuation in punctuations:
+            inputs = [inp.replace(f'{punctuation} ', f'{punctuation}').replace(f'{punctuation}', f'{punctuation} ') for inp in inputs]
+        inputs = [' ' + inp.lstrip() for inp in inputs]
         targets = examples[summary_column]
         targets = [x.replace("\n", " ") for x in targets]
         inputs = [prefix + inp for inp in inputs]
@@ -700,38 +705,46 @@ def main():
         from nltk.tokenize import sent_tokenize
         encoder_last_hidden_state = outputs.encoder_last_hidden_state
         articles = tokenizer.batch_decode(batch.input_ids, skip_special_tokens=True)
+        for punctuation in punctuations:
+            articles = [inp.replace(f'{punctuation} ', f'{punctuation}').replace(f'{punctuation}', f'{punctuation} ') for inp in articles]
         for article_index, article in enumerate(articles):
             sents = sent_tokenize(article)
             kmeans = KMeans(n_clusters=3)
             embeddings = []
             start_position = 1
-            for sent in sents:
-                # print(sent)
-                sent = ' ' + sent
+            for sent_id, sent in enumerate(sents):
+                if sent_id != 0:
+                    sent = ' ' + sent
                 sent_len = len(tokenizer(sent).input_ids) - 2
                 sentence_embedding = encoder_last_hidden_state[article_index, start_position: start_position + sent_len]
-                # if torch.any(torch.isnan(sentence_embedding)).item():
-                #     break
                 embeddings.append(torch.mean(sentence_embedding, dim=0))
-                # accelerator.print('sentence_embedding')
-                # accelerator.print(sentence_embedding)
-                # accelerator.print(sentence_embedding.size())
-                # accelerator.print(sent)
-                # accelerator.print(tokenizer(sent).input_ids)
-                # accelerator.print(sent_len)
-                # accelerator.print(batch.input_ids[article_index, start_position: start_position + sent_len])
-                # accelerator.print(tokenizer.decode(batch.input_ids[article_index, start_position: start_position + sent_len], skip_special_tokens=False))
                 start_position += sent_len
             embeddings = torch.stack(embeddings)
             # print(embeddings.shape)
             np_emb = embeddings.cpu().detach().numpy()
-            # try:
-            kmeans = kmeans.fit(np_emb)
-            # except:
-            #     accelerator.print(batch.input_ids[article_index])
-            #     accelerator.print(np_emb)
-            #     accelerator.print(embeddings)
-            #     accelerator.print(encoder_last_hidden_state[article_index, : start_position])
+            try:
+                kmeans = kmeans.fit(np_emb)
+            except:
+                traceback.print_exc()
+                start_position = 1
+                for sent_id, sent in enumerate(sents):
+                    if sent_id != 0:
+                        sent = ' ' + sent
+                    sent_len = len(tokenizer(sent).input_ids) - 2
+                    sentence_embedding = encoder_last_hidden_state[article_index, start_position: start_position + sent_len]
+                    print('sentence_embedding')
+                    print(sentence_embedding)
+                    print(sentence_embedding.size())
+                    print(sent)
+                    print(tokenizer(sent).input_ids)
+                    print(sent_len)
+                    print(batch.input_ids[article_index, start_position: start_position + sent_len])
+                    print(tokenizer.decode(batch.input_ids[article_index, start_position: start_position + sent_len], skip_special_tokens=False))
+                    start_position += sent_len
+                print(batch.input_ids[article_index])
+                print(np_emb)
+                print(embeddings)
+                print(encoder_last_hidden_state[article_index, : start_position])
 
             # km_labels = km.labels_
             # print(km_labels)
