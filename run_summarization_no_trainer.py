@@ -447,6 +447,9 @@ def main():
     if args.dataset_name is not None:
         # Downloading and loading a dataset from the hub.
         raw_datasets = load_dataset(args.dataset_name, args.dataset_config_name)
+        if args.dataset_name == 'cnn_dailymail':
+            bad_ids = {"0405e4119ac6c1eb83bff8dcc69953a8691d737b"}
+            raw_datasets = raw_datasets.filter(lambda example: example['id'] not in bad_ids)
     else:
         data_files = {}
         if args.train_file is not None:
