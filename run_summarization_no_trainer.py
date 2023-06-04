@@ -29,6 +29,7 @@ import platform
 #     os.environ["http_proxy"] = "http://127.0.0.1:7890"
 #     os.environ["https_proxy"] = "http://127.0.0.1:7890"
 import random
+import unicodedata
 from pathlib import Path
 from nltk.tokenize import sent_tokenize
 import datasets
@@ -335,6 +336,12 @@ def parse_args():
         help="Only do test",
     )
     parser.add_argument(
+        "--resume_step",
+        type=int,
+        default=0,
+        help="resume_step",
+    )
+    parser.add_argument(
         "--with_tracking",
         action="store_true",
         help="Whether to enable experiment trackers for logging.",
@@ -447,10 +454,6 @@ def main():
     if args.dataset_name is not None:
         # Downloading and loading a dataset from the hub.
         raw_datasets = load_dataset(args.dataset_name, args.dataset_config_name)
-        if args.dataset_name == 'cnn_dailymail':
-            # bad_ids = {"0405e4119ac6c1eb83bff8dcc69953a8691d737b", '955008863d08cded65add156b2272222d233674a'}
-            # raw_datasets = raw_datasets.filter(lambda example: example['id'] not in bad_ids)
-            raw_datasets = raw_datasets.filter(lambda example: len(sent_tokenize(example['article'])) > 3)
     else:
         data_files = {}
         if args.train_file is not None:
@@ -570,6 +573,20 @@ def main():
             raise ValueError(
                 f"--summary_column' value '{args.summary_column}' needs to be one of: {', '.join(column_names)}"
             )
+
+    def clean(example):
+        example[text_column] = unicodedata.normalize('NFKC', example[text_column])
+        example[text_column] = ' '.join([x for x in example[text_column].split(' ') if x != ''])
+
+        example[summary_column] = unicodedata.normalize('NFKC', example[summary_column])
+        example[summary_column] = ' '.join([x for x in example[summary_column].split(' ') if x != ''])
+        return example
+
+    accelerator.print(raw_datasets)
+    raw_datasets = raw_datasets.map(clean)
+    raw_datasets = raw_datasets.filter(lambda example: len(sent_tokenize(example[text_column])) > 3)
+    accelerator.print(raw_datasets)
+
     if args.target_domain_dataset_name is not None:
         target_domain_dataset_columns = summarization_name_mapping.get(args.target_domain_dataset_name, None)
         target_domain_raw_datasets = target_domain_raw_datasets.rename_column(target_domain_dataset_columns[0], text_column)
@@ -606,7 +623,6 @@ def main():
         scores = get_salient_score_rouge1(article, summary)
         # return torch.Tensor([scores[token] if token not in tokenizer.all_special_ids else 0 for token in article])
         return torch.Tensor([scores[token] for token in article])
-
 
     def get_batch_sailent_scores_rouge1(articles, summaries):
         assert len(articles) == len(summaries)
@@ -813,20 +829,20 @@ def main():
             # tokenizer.add_special_tokens({"additional_special_tokens": [prompt_sep_token]})
             # prompt_sep_token_id = tokenizer.convert_tokens_to_ids(prompt_sep_token)
             raw_datasets = raw_datasets.map(
-            batch_map_all_subject_verb_obj,
-            batched=True,
-            num_proc=args.preprocessing_num_workers,
-            load_from_cache_file=True,
-            desc="Running svo on dataset",
-        )
+                batch_map_all_subject_verb_obj,
+                batched=True,
+                num_proc=args.preprocessing_num_workers,
+                load_from_cache_file=True,
+                desc="Running svo on dataset",
+            )
 
         if args.encoder_prompt == "rouge":
             raw_datasets = raw_datasets.map(
-            get_rouge_prompt_article,
-            num_proc=args.preprocessing_num_workers,
-            load_from_cache_file=True,
-            desc="Running knn prompt on dataset",
-        )
+                get_rouge_prompt_article,
+                num_proc=args.preprocessing_num_workers,
+                load_from_cache_file=True,
+                desc="Running knn prompt on dataset",
+            )
 
         processed_datasets = raw_datasets.map(
             preprocess_function,
@@ -992,6 +1008,7 @@ def main():
             resume_step = int(training_difference.replace("step_", ""))
             starting_epoch = resume_step // len(train_dataloader)
             resume_step -= starting_epoch * len(train_dataloader)
+
     debug_file = open("log", "w", encoding="utf-8")
     for epoch in range(starting_epoch, args.num_train_epochs):
         if not args.test:
@@ -1006,6 +1023,9 @@ def main():
                     if resume_step is not None and step < resume_step:
                         completed_steps += 1
                         continue
+                if completed_steps < args.resume_step:
+                    completed_steps += 1
+                    continue
 
                 with accelerator.accumulate(model):
                     outputs = model(**batch)
@@ -1059,7 +1079,7 @@ def main():
 
                 if isinstance(checkpointing_steps, int):
                     if completed_steps % checkpointing_steps == 0:
-                        output_dir = f"step_{completed_steps }"
+                        output_dir = f"step_{completed_steps}"
                         if args.output_dir is not None:
                             output_dir = os.path.join(args.output_dir, output_dir)
                         accelerator.save_state(output_dir)
