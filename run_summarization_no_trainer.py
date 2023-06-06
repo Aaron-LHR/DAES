@@ -578,13 +578,42 @@ def main():
         example[text_column] = unicodedata.normalize('NFKC', example[text_column])
         example[text_column] = ' '.join([x for x in example[text_column].split(' ') if x != ''])
 
+        from nltk.tokenize import sent_tokenize
+        highlights_sents = sent_tokenize(example[summary_column])
+        if len(highlights_sents) == 1:
+            example[summary_column] = example[summary_column].replace("\n", ". ")
+            highlights_sents = sent_tokenize(example[summary_column])
+        if len(highlights_sents) == 1:
+            example[summary_column] = example[summary_column].replace("  ", ". ")
+
         example[summary_column] = unicodedata.normalize('NFKC', example[summary_column])
         example[summary_column] = ' '.join([x for x in example[summary_column].split(' ') if x != ''])
         return example
 
+    def dataset_filter(example):
+        from nltk.tokenize import sent_tokenize
+        article_sents = sent_tokenize(example[text_column])
+        highlights_sents = sent_tokenize(example[summary_column])
+        if len(article_sents) <= 3:
+            return False
+
+        from rouge_score import rouge_scorer
+        scorer = rouge_scorer.RougeScorer(['rouge2'], use_stemmer=True)
+        flag = 0
+        for i, article_sent in enumerate(article_sents):
+            rouges = []
+            for j, highlights_sent in enumerate(highlights_sents):
+                score = scorer.score(highlights_sent, article_sent)["rouge2"].fmeasure
+                rouges.append((j + 1, score))
+            rouges = sorted(rouges, key=lambda x: x[1], reverse=True)
+            if rouges[0][1] > 0:
+                article_sents[i] = f'[{rouges[0][0]}] {article_sents[i]} [/{rouges[0][0]}]'
+                flag = 1
+        return flag > 0
+
     accelerator.print(raw_datasets)
-    raw_datasets = raw_datasets.map(clean)
-    raw_datasets = raw_datasets.filter(lambda example: len(sent_tokenize(example[text_column])) > 3)
+    raw_datasets = raw_datasets.map(clean, num_proc=args.preprocessing_num_workers)
+    raw_datasets = raw_datasets.filter(dataset_filter, num_proc=args.preprocessing_num_workers)
     accelerator.print(raw_datasets)
 
     if args.target_domain_dataset_name is not None:
@@ -667,12 +696,8 @@ def main():
 
     def get_rouge_prompt_article(example):
         from nltk.tokenize import sent_tokenize
-        article_sents = sent_tokenize(example['article'])
-        highlights_sents = sent_tokenize(example['highlights'])
-        if len(highlights_sents) == 1:
-            highlights_sents = sent_tokenize(example['highlights'].replace("\n", ". "))
-        if len(highlights_sents) == 1:
-            highlights_sents = sent_tokenize(example['highlights'].replace("  ", ". "))
+        article_sents = sent_tokenize(example[text_column])
+        highlights_sents = sent_tokenize(example[summary_column])
 
         from rouge_score import rouge_scorer
         scorer = rouge_scorer.RougeScorer(['rouge2'], use_stemmer=True)
@@ -684,7 +709,7 @@ def main():
             rouges = sorted(rouges, key=lambda x: x[1], reverse=True)
             if rouges[0][1] > 0:
                 article_sents[i] = f'[{rouges[0][0]}] {article_sents[i]} [/{rouges[0][0]}]'
-        example['article'] = ' '.join(article_sents)
+        example[text_column] = ' '.join(article_sents)
         return example
 
     punctuations = [',', '.', ';', '"', "'", '?', '!', ':']
@@ -694,7 +719,10 @@ def main():
             inputs = [inp.replace(f'{punctuation} ', f'{punctuation}').replace(f'{punctuation}', f'{punctuation} ') for inp in inputs]
         inputs = [' ' + inp.lstrip() for inp in inputs]
         targets = examples[summary_column]
-        targets = [x.replace("\n", " ") for x in targets]
+        for punctuation in punctuations:
+            targets = [inp.replace(f'{punctuation} ', f'{punctuation}').replace(f'{punctuation}', f'{punctuation} ') for inp in targets]
+        targets = [x.replace("\n", "") for x in targets]
+        targets = [' ' + inp.lstrip() for inp in targets]
         inputs = [prefix + inp for inp in inputs]
         model_inputs = tokenizer(inputs, max_length=args.max_source_length, padding=padding, truncation=True)
 
@@ -716,66 +744,130 @@ def main():
             model_inputs["ext_rouge2_labels"] = get_batch_sailent_scores_rouge2(model_inputs["input_ids"], model_inputs["labels"])
         return model_inputs
 
-    def cluster_prompt(batch, outputs):
-        from sklearn.cluster import KMeans
+    def split_sent_embedding_from_outputs(input_ids, encoder_last_hidden_state):
         from nltk.tokenize import sent_tokenize
-        encoder_last_hidden_state = outputs.encoder_last_hidden_state
-        articles = tokenizer.batch_decode(batch.input_ids, skip_special_tokens=True)
+        input_ids[input_ids == -100] = tokenizer.pad_token_id
+        article = tokenizer.decode(input_ids, skip_special_tokens=True)
         for punctuation in punctuations:
-            articles = [inp.replace(f'{punctuation} ', f'{punctuation}').replace(f'{punctuation}', f'{punctuation} ') for inp in articles]
-        for article_index, article in enumerate(articles):
-            sents = sent_tokenize(article)
-            kmeans = KMeans(n_clusters=3)
-            embeddings = []
+            article = article.replace(f'{punctuation} ', f'{punctuation}').replace(f'{punctuation}', f'{punctuation} ')
+        sents = sent_tokenize(article)
+        embeddings = []
+        start_position = 1
+        for sent_id, sent in enumerate(sents):
+            if sent_id != 0:
+                sent = ' ' + sent
+            sent_len = len(tokenizer(sent).input_ids) - 2
+            sentence_embedding = encoder_last_hidden_state[start_position: start_position + sent_len]
+            embeddings.append(torch.mean(sentence_embedding, dim=0))
+            start_position += sent_len
+        embeddings = torch.stack(embeddings)
+        return article, sents, embeddings
+
+    def cluster(np_emb, sents, input_ids, encoder_last_hidden_state):
+        from sklearn.cluster import KMeans
+        kmeans = KMeans(n_clusters=3)
+        try:
+            kmeans = kmeans.fit(np_emb)
+        except:
+            traceback.print_exc()
             start_position = 1
             for sent_id, sent in enumerate(sents):
                 if sent_id != 0:
                     sent = ' ' + sent
                 sent_len = len(tokenizer(sent).input_ids) - 2
-                sentence_embedding = encoder_last_hidden_state[article_index, start_position: start_position + sent_len]
-                embeddings.append(torch.mean(sentence_embedding, dim=0))
+                sentence_embedding = encoder_last_hidden_state[start_position: start_position + sent_len]
+                print('sentence_embedding')
+                print(sentence_embedding)
+                print(sentence_embedding.size())
+                print(sent)
+                print(tokenizer(sent).input_ids)
+                print(sent_len)
+                print(input_ids[start_position: start_position + sent_len])
+                print(tokenizer.decode(input_ids[start_position: start_position + sent_len], skip_special_tokens=False))
                 start_position += sent_len
-            embeddings = torch.stack(embeddings)
-            # print(embeddings.shape)
+            print(input_ids)
+            print(np_emb)
+            print(encoder_last_hidden_state)
+
+        # km_labels = km.labels_
+        # print(km_labels)
+
+        for n_cluster_index in range(kmeans.n_clusters):
+            distances = kmeans.transform(np_emb)[:, n_cluster_index]
+            # print(len([closest_i for closest_i in np.argsort(distances) if kmeans.labels_[closest_i] == n_cluster_index]))
+            # closest = [closest_i for closest_i in np.argsort(distances) if kmeans.labels_[closest_i] == n_cluster_index][:3]
+            closest = np.argsort(distances)[:3]
+            for center_sent_index in closest:
+                sents[center_sent_index] = f'[{n_cluster_index + 1}] {sents[center_sent_index]} [/{n_cluster_index + 1}]'
+        article = ' '.join(sents)
+        return article
+
+    def cluster_prompt(batch, encoder_last_hidden_states):
+        articles = []
+        for article_index, encoder_last_hidden_state in enumerate(encoder_last_hidden_states):
+            input_ids = batch.input_ids[article_index]
+            article, sents, embeddings = split_sent_embedding_from_outputs(input_ids, encoder_last_hidden_state)
             np_emb = embeddings.cpu().detach().numpy()
-            try:
-                kmeans = kmeans.fit(np_emb)
-            except:
-                traceback.print_exc()
-                start_position = 1
-                for sent_id, sent in enumerate(sents):
-                    if sent_id != 0:
-                        sent = ' ' + sent
-                    sent_len = len(tokenizer(sent).input_ids) - 2
-                    sentence_embedding = encoder_last_hidden_state[article_index, start_position: start_position + sent_len]
-                    print('sentence_embedding')
-                    print(sentence_embedding)
-                    print(sentence_embedding.size())
-                    print(sent)
-                    print(tokenizer(sent).input_ids)
-                    print(sent_len)
-                    print(batch.input_ids[article_index, start_position: start_position + sent_len])
-                    print(tokenizer.decode(batch.input_ids[article_index, start_position: start_position + sent_len], skip_special_tokens=False))
-                    start_position += sent_len
-                print(batch.input_ids[article_index])
-                print(np_emb)
-                print(embeddings)
-                print(encoder_last_hidden_state[article_index, : start_position])
-
-            # km_labels = km.labels_
-            # print(km_labels)
-
-            for n_cluster_index in range(kmeans.n_clusters):
-                distances = kmeans.transform(np_emb)[:, n_cluster_index]
-                # print(len([closest_i for closest_i in np.argsort(distances) if kmeans.labels_[closest_i] == n_cluster_index]))
-                # closest = [closest_i for closest_i in np.argsort(distances) if kmeans.labels_[closest_i] == n_cluster_index][:3]
-                closest = np.argsort(distances)[:3]
-                for center_sent_index in closest:
-                    sents[
-                        center_sent_index] = f'[{n_cluster_index + 1}] {sents[center_sent_index]} [/{n_cluster_index + 1}]'
-            article = ' '.join(sents)
-            articles[article_index] = article
+            article = cluster(np_emb, sents, input_ids, encoder_last_hidden_state)
+            articles.append(article)
         return articles
+
+    def rouge_related_contrastive_loss(article_sents, article_embeddings, highlights_sents, highlight_embeddings):
+        from ContrastiveLoss import ContrastiveLoss
+        contrastive_loss_fn = ContrastiveLoss()
+        from rouge_score import rouge_scorer
+        scorer = rouge_scorer.RougeScorer(['rouge2'], use_stemmer=True)
+        left_examples = []
+        right_examples = []
+        contrastive_labels = []
+
+        for i, article_sent in enumerate(article_sents):
+            rouges = []
+            for j, highlights_sent in enumerate(highlights_sents):
+                score = scorer.score(highlights_sent, article_sent)["rouge2"].fmeasure
+                rouges.append((j, score))
+            rouges = sorted(rouges, key=lambda x: x[1], reverse=True)
+            if rouges[0][1] > 0:  # 正样本对
+                left_examples.append(article_embeddings[i])
+                right_examples.append(highlight_embeddings[rouges[0][0]])
+                contrastive_labels.append(1)
+
+        # 负样本对
+        for i in range(highlight_embeddings.size()[0]):
+            for j in range(i + 1, highlight_embeddings.size()[0]):
+                left_examples.append(highlight_embeddings[i])
+                right_examples.append(highlight_embeddings[j])
+                contrastive_labels.append(0)
+
+        left_examples = torch.stack(left_examples)
+        right_examples = torch.stack(right_examples)
+        contrastive_labels = torch.tensor(contrastive_labels)
+        # contrastive_labels = contrastive_labels.to(accelerator.device)
+        contrastive_loss = contrastive_loss_fn(left_examples, right_examples, contrastive_labels)
+        return contrastive_loss
+
+    def contrastive_cluster_prompt(batch, encoder_last_hidden_states, label_encoder_last_hidden_states):
+        articles = []
+        contrastive_losses = []
+        for article_index, encoder_last_hidden_state in enumerate(encoder_last_hidden_states):
+            input_ids = batch.input_ids[article_index]
+            article, sents, embeddings = split_sent_embedding_from_outputs(input_ids, encoder_last_hidden_state)
+
+            label_input_ids = batch.labels[article_index]
+            label_encoder_last_hidden_state = label_encoder_last_hidden_states[article_index]
+            highlight, highlights_sents, highlight_embeddings = split_sent_embedding_from_outputs(label_input_ids, label_encoder_last_hidden_state)
+
+            contrastive_loss = rouge_related_contrastive_loss(sents, embeddings, highlights_sents, highlight_embeddings)
+            contrastive_losses.append(contrastive_loss)
+
+            np_emb = embeddings.cpu().detach().numpy()
+            article = cluster(np_emb, sents, input_ids, encoder_last_hidden_state)
+            articles.append(article)
+
+        contrastive_loss_sum = torch.sum(torch.stack(contrastive_losses))
+        return articles, contrastive_loss_sum
+
+
 
     def batch_map_all_subject_verb_obj(examples):
         import spacy
@@ -1015,6 +1107,7 @@ def main():
             model.train()
             if args.with_tracking:
                 total_loss = 0
+                total_contrastive_loss = 0
                 total_ext_rouge1_loss = 0
                 total_ext_rouge2_loss = 0
             for step, batch in enumerate(train_dataloader):
@@ -1043,8 +1136,50 @@ def main():
                         outputs = model(**batch)
                         batch = batch.to('cpu')
                         del batch
+                        loss = outputs.loss
+                        # We keep track of the loss at each epoch
+                        if args.with_tracking:
+                            total_loss += loss.detach().float()
 
-                    if args.model_type == "BartForConditionalGenerationWithRouge1":
+                    elif args.encoder_prompt == "contrastive_kmeans":
+                        batch = batch.to('cpu')
+                        encoder_last_hidden_states = outputs.encoder_last_hidden_state.to('cpu')
+                        del outputs
+
+                        labels_without_negative_values = batch['labels'].clone()
+                        labels_without_negative_values[labels_without_negative_values == -100] = tokenizer.pad_token_id
+                        highlights = tokenizer.batch_decode(labels_without_negative_values, skip_special_tokens=True)
+                        model_inputs = [
+                            tokenizer(input_, max_length=args.max_target_length, padding=padding, truncation=True) for
+                            input_ in highlights]
+                        features = data_collator(model_inputs)
+                        features = features.to(accelerator.device)
+                        outputs = model(**features)
+                        features = features.to('cpu')
+                        del features
+                        label_encoder_last_hidden_states = outputs.encoder_last_hidden_state.to('cpu')
+                        del outputs
+
+                        inputs, contrastive_loss = contrastive_cluster_prompt(batch, encoder_last_hidden_states, label_encoder_last_hidden_states)
+                        inputs = [prefix + inp for inp in inputs]
+                        model_inputs = [
+                            tokenizer(input_, max_length=args.max_source_length, padding=padding, truncation=True) for
+                            input_ in inputs]
+                        features = data_collator(model_inputs)
+                        for key in ['input_ids', 'attention_mask']:
+                            batch[key] = features[key]
+                        batch = batch.to(accelerator.device)
+                        outputs = model(**batch)
+                        batch = batch.to('cpu')
+                        del batch
+                        contrastive_loss = contrastive_loss.to(accelerator.device)
+                        loss = outputs.loss + contrastive_loss
+                        # We keep track of the loss at each epoch
+                        if args.with_tracking:
+                            total_loss += outputs.loss.detach().float()
+                            total_contrastive_loss += contrastive_loss.detach().float()
+
+                    elif args.model_type == "BartForConditionalGenerationWithRouge1":
                         abs_loss = outputs.loss
                         masked_ext_rouge1_loss = outputs.masked_ext_rouge1_loss
                         # We keep track of the loss at each epoch
@@ -1099,7 +1234,7 @@ def main():
         for step, batch in tqdm(enumerate(eval_dataloader), total=len(eval_dataloader)):
             with torch.no_grad():
 
-                if args.encoder_prompt == "kmeans":
+                if args.encoder_prompt == "kmeans" or args.encoder_prompt == "contrastive_kmeans":
                     outputs = model(**batch)
                     batch = batch.to('cpu')
                     inputs = cluster_prompt(batch, outputs)
@@ -1215,6 +1350,8 @@ def main():
         if args.with_tracking:
             if not args.test:
                 result["train_loss"] = total_loss.item() / len(train_dataloader)  # 生成式loss
+            if args.encoder_prompt == "contrastive_kmeans":
+                result["total_contrastive_loss"] = total_contrastive_loss.item() / len(train_dataloader)
             result["epoch"] = epoch
             result["step"] = completed_steps
             if args.model_type == "BartForConditionalGenerationWithRouge1":
