@@ -812,11 +812,12 @@ def main():
             articles.append(article)
         return articles
 
+    from rouge_score import rouge_scorer
+    scorer = rouge_scorer.RougeScorer(['rouge2'], use_stemmer=True)
     def rouge_related_contrastive_loss(article_sents, article_embeddings, highlights_sents, highlight_embeddings):
         from ContrastiveLoss import ContrastiveLoss
         contrastive_loss_fn = ContrastiveLoss()
-        from rouge_score import rouge_scorer
-        scorer = rouge_scorer.RougeScorer(['rouge2'], use_stemmer=True)
+
         left_examples = []
         right_examples = []
         contrastive_labels = []
@@ -841,7 +842,7 @@ def main():
 
         left_examples = torch.stack(left_examples)
         right_examples = torch.stack(right_examples)
-        contrastive_labels = torch.tensor(contrastive_labels)
+        contrastive_labels = torch.tensor(contrastive_labels).to(accelerator.device)
         # contrastive_labels = contrastive_labels.to(accelerator.device)
         contrastive_loss = contrastive_loss_fn(left_examples, right_examples, contrastive_labels)
         return contrastive_loss
@@ -1125,8 +1126,12 @@ def main():
 
                     if args.encoder_prompt == "kmeans":
                         batch = batch.to('cpu')
-                        inputs = cluster_prompt(batch, outputs)
+                        encoder_last_hidden_states = outputs.encoder_last_hidden_state.to('cpu')
+                        # accelerator.print(outputs.keys()) # dict_keys(['loss', 'logits', 'encoder_last_hidden_state'])
+                        inputs = cluster_prompt(batch, encoder_last_hidden_states)
+                        del encoder_last_hidden_states
                         del outputs
+
                         inputs = [prefix + inp for inp in inputs]
                         model_inputs = [tokenizer(input_, max_length=args.max_source_length, padding=padding, truncation=True) for input_ in inputs]
                         features = data_collator(model_inputs)
@@ -1137,13 +1142,17 @@ def main():
                         batch = batch.to('cpu')
                         del batch
                         loss = outputs.loss
+                        del outputs
                         # We keep track of the loss at each epoch
                         if args.with_tracking:
-                            total_loss += loss.detach().float()
+                            total_loss += loss.cpu().detach().float()
 
                     elif args.encoder_prompt == "contrastive_kmeans":
                         batch = batch.to('cpu')
-                        encoder_last_hidden_states = outputs.encoder_last_hidden_state.to('cpu')
+                        encoder_last_hidden_states = outputs.encoder_last_hidden_state
+                        del outputs.loss
+                        del outputs.logits
+                        # accelerator.print(outputs.keys()) # dict_keys(['loss', 'logits', 'encoder_last_hidden_state'])
                         del outputs
 
                         labels_without_negative_values = batch['labels'].clone()
@@ -1157,10 +1166,19 @@ def main():
                         outputs = model(**features)
                         features = features.to('cpu')
                         del features
-                        label_encoder_last_hidden_states = outputs.encoder_last_hidden_state.to('cpu')
+                        label_encoder_last_hidden_states = outputs.encoder_last_hidden_state
+                        del outputs.past_key_values
+                        del outputs.logits
+                        # accelerator.print(outputs.keys()) # dict_keys(['logits', 'past_key_values', 'encoder_last_hidden_state'])
                         del outputs
 
                         inputs, contrastive_loss = contrastive_cluster_prompt(batch, encoder_last_hidden_states, label_encoder_last_hidden_states)
+                        # del encoder_last_hidden_states
+                        # del label_encoder_last_hidden_states
+
+                        with torch.cuda.device(accelerator.device):
+                            torch.cuda.empty_cache()
+
                         inputs = [prefix + inp for inp in inputs]
                         model_inputs = [
                             tokenizer(input_, max_length=args.max_source_length, padding=padding, truncation=True) for
@@ -1170,14 +1188,15 @@ def main():
                             batch[key] = features[key]
                         batch = batch.to(accelerator.device)
                         outputs = model(**batch)
+                        # accelerator.print(outputs.keys())
                         batch = batch.to('cpu')
                         del batch
-                        contrastive_loss = contrastive_loss.to(accelerator.device)
+                        # contrastive_loss = contrastive_loss.to(accelerator.device)
                         loss = outputs.loss + contrastive_loss
                         # We keep track of the loss at each epoch
                         if args.with_tracking:
-                            total_loss += outputs.loss.detach().float()
-                            total_contrastive_loss += contrastive_loss.detach().float()
+                            total_loss += outputs.loss.cpu().detach().float()
+                            total_contrastive_loss += contrastive_loss.cpu().detach().float()
 
                     elif args.model_type == "BartForConditionalGenerationWithRouge1":
                         abs_loss = outputs.loss
@@ -1237,7 +1256,11 @@ def main():
                 if args.encoder_prompt == "kmeans" or args.encoder_prompt == "contrastive_kmeans":
                     outputs = model(**batch)
                     batch = batch.to('cpu')
-                    inputs = cluster_prompt(batch, outputs)
+                    outputs.encoder_last_hidden_state = outputs.encoder_last_hidden_state.to('cpu')
+                    encoder_last_hidden_states = outputs.encoder_last_hidden_state
+                    inputs = cluster_prompt(batch, encoder_last_hidden_states)
+                    del outputs.past_key_values
+                    del outputs.logits
                     del outputs
                     inputs = [prefix + inp for inp in inputs]
                     model_inputs = [
