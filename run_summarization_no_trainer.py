@@ -581,10 +581,10 @@ def main():
         from nltk.tokenize import sent_tokenize
         highlights_sents = sent_tokenize(example[summary_column])
         if len(highlights_sents) == 1:
-            example[summary_column] = example[summary_column].replace("\n", ". ")
+            example[summary_column] = example[summary_column].replace("\n", ". \n")
             highlights_sents = sent_tokenize(example[summary_column])
         if len(highlights_sents) == 1:
-            example[summary_column] = example[summary_column].replace("  ", ". ")
+            example[summary_column] = example[summary_column].replace("  ", ". \n")
 
         example[summary_column] = unicodedata.normalize('NFKC', example[summary_column])
         example[summary_column] = ' '.join([x for x in example[summary_column].split(' ') if x != ''])
@@ -592,9 +592,15 @@ def main():
 
     def dataset_filter(example):
         from nltk.tokenize import sent_tokenize
-        article_sents = sent_tokenize(example[text_column])
-        highlights_sents = sent_tokenize(example[summary_column])
+        tmp_ids = tokenizer(example[text_column], max_length=args.max_source_length, truncation=True).input_ids
+        article = tokenizer.decode(tmp_ids)
+        article_sents = sent_tokenize(article)
+        # highlights_sents = sent_tokenize(example[summary_column])
+        highlights_sents = example[summary_column].split('\n')
         if len(article_sents) <= 3:
+            return False
+
+        if any([len([t for t in x.split(' ') if t != '']) < 4 for x in example[summary_column].split('\n')]):
             return False
 
         from rouge_score import rouge_scorer
@@ -721,7 +727,7 @@ def main():
         targets = examples[summary_column]
         for punctuation in punctuations:
             targets = [inp.replace(f'{punctuation} ', f'{punctuation}').replace(f'{punctuation}', f'{punctuation} ') for inp in targets]
-        targets = [x.replace("\n", "") for x in targets]
+        # targets = [x.replace("\n", "") for x in targets]
         targets = [' ' + inp.lstrip() for inp in targets]
         inputs = [prefix + inp for inp in inputs]
         model_inputs = tokenizer(inputs, max_length=args.max_source_length, padding=padding, truncation=True)
@@ -744,13 +750,16 @@ def main():
             model_inputs["ext_rouge2_labels"] = get_batch_sailent_scores_rouge2(model_inputs["input_ids"], model_inputs["labels"])
         return model_inputs
 
-    def split_sent_embedding_from_outputs(input_ids, encoder_last_hidden_state):
+    def split_sent_embedding_from_outputs(input_ids, encoder_last_hidden_state, first_use_n=False):
         from nltk.tokenize import sent_tokenize
         input_ids[input_ids == -100] = tokenizer.pad_token_id
         article = tokenizer.decode(input_ids, skip_special_tokens=True)
         for punctuation in punctuations:
             article = article.replace(f'{punctuation} ', f'{punctuation}').replace(f'{punctuation}', f'{punctuation} ')
-        sents = sent_tokenize(article)
+        if first_use_n:
+            sents = article.split('\n')
+        else:
+            sents = sent_tokenize(article)
         embeddings = []
         start_position = 1
         for sent_id, sent in enumerate(sents):
@@ -788,6 +797,7 @@ def main():
             print(input_ids)
             print(np_emb)
             print(encoder_last_hidden_state)
+            return ' '.join(sents)
 
         # km_labels = km.labels_
         # print(km_labels)
@@ -840,11 +850,19 @@ def main():
                 right_examples.append(highlight_embeddings[j])
                 contrastive_labels.append(0)
 
-        left_examples = torch.stack(left_examples)
-        right_examples = torch.stack(right_examples)
-        contrastive_labels = torch.tensor(contrastive_labels).to(accelerator.device)
-        # contrastive_labels = contrastive_labels.to(accelerator.device)
-        contrastive_loss = contrastive_loss_fn(left_examples, right_examples, contrastive_labels)
+        try:
+            left_examples = torch.stack(left_examples)
+            right_examples = torch.stack(right_examples)
+            contrastive_labels = torch.tensor(contrastive_labels).to(accelerator.device)
+            # contrastive_labels = contrastive_labels.to(accelerator.device)
+            contrastive_loss = contrastive_loss_fn(left_examples, right_examples, contrastive_labels)
+        except:
+            traceback.print_exc()
+            print(article_sents)
+            print(article_embeddings)
+            print(highlights_sents)
+            print(highlight_embeddings)
+            return torch.tensor(0.0).to(accelerator.device)
         return contrastive_loss
 
     def contrastive_cluster_prompt(batch, encoder_last_hidden_states, label_encoder_last_hidden_states):
@@ -856,7 +874,7 @@ def main():
 
             label_input_ids = batch.labels[article_index]
             label_encoder_last_hidden_state = label_encoder_last_hidden_states[article_index]
-            highlight, highlights_sents, highlight_embeddings = split_sent_embedding_from_outputs(label_input_ids, label_encoder_last_hidden_state)
+            highlight, highlights_sents, highlight_embeddings = split_sent_embedding_from_outputs(label_input_ids, label_encoder_last_hidden_state, first_use_n=True)
 
             contrastive_loss = rouge_related_contrastive_loss(sents, embeddings, highlights_sents, highlight_embeddings)
             contrastive_losses.append(contrastive_loss)
@@ -1117,9 +1135,13 @@ def main():
                     if resume_step is not None and step < resume_step:
                         completed_steps += 1
                         continue
-                if completed_steps < args.resume_step:
-                    completed_steps += 1
-                    continue
+                if completed_steps <= args.resume_step:
+                    if completed_steps == args.resume_step:
+                        logger.info("***** Resume Done *****")
+                    else:
+                        progress_bar.update(1)
+                        completed_steps += 1
+                        continue
 
                 with accelerator.accumulate(model):
                     outputs = model(**batch)
@@ -1194,9 +1216,14 @@ def main():
                         # contrastive_loss = contrastive_loss.to(accelerator.device)
                         loss = outputs.loss + contrastive_loss
                         # We keep track of the loss at each epoch
+                        # print(f'gen loss: {outputs.loss.cpu().detach().float()}')
+                        # print(f'contrastive_loss loss: {contrastive_loss.cpu().detach().float()}')
                         if args.with_tracking:
-                            total_loss += outputs.loss.cpu().detach().float()
-                            total_contrastive_loss += contrastive_loss.cpu().detach().float()
+                            gen_loss = outputs.loss.cpu().detach().float()
+                            log_contrastive_loss = contrastive_loss.cpu().detach().float()
+                            accelerator.log({"batch_gen_loss": gen_loss, "batch_contrastive_loss": log_contrastive_loss}, step=completed_steps)
+                            total_loss += gen_loss
+                            total_contrastive_loss += log_contrastive_loss
 
                     elif args.model_type == "BartForConditionalGenerationWithRouge1":
                         abs_loss = outputs.loss
