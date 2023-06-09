@@ -1130,6 +1130,7 @@ def main():
                 total_ext_rouge1_loss = 0
                 total_ext_rouge2_loss = 0
             for step, batch in enumerate(train_dataloader):
+                # accelerator.print(batch.keys()) # ['input_ids', 'attention_mask', 'labels', 'decoder_input_ids']
                 # We need to skip steps until we reach the resumed step
                 if args.resume_from_checkpoint and epoch == starting_epoch:
                     if resume_step is not None and step < resume_step:
@@ -1144,15 +1145,12 @@ def main():
                         continue
 
                 with accelerator.accumulate(model):
-                    outputs = model(**batch)
-
                     if args.encoder_prompt == "kmeans":
+                        encoder_last_hidden_states = model.get_encoder()(input_ids=batch['input_ids'], attention_mask=batch['attention_mask']).last_hidden_state.to('cpu')
                         batch = batch.to('cpu')
-                        encoder_last_hidden_states = outputs.encoder_last_hidden_state.to('cpu')
                         # accelerator.print(outputs.keys()) # dict_keys(['loss', 'logits', 'encoder_last_hidden_state'])
                         inputs = cluster_prompt(batch, encoder_last_hidden_states)
                         del encoder_last_hidden_states
-                        del outputs
 
                         inputs = [prefix + inp for inp in inputs]
                         model_inputs = [tokenizer(input_, max_length=args.max_source_length, padding=padding, truncation=True) for input_ in inputs]
@@ -1170,12 +1168,9 @@ def main():
                             total_loss += loss.cpu().detach().float()
 
                     elif args.encoder_prompt == "contrastive_kmeans":
+                        encoder_last_hidden_states = model.get_encoder()(input_ids=batch['input_ids'], attention_mask=batch['attention_mask']).last_hidden_state
                         batch = batch.to('cpu')
-                        encoder_last_hidden_states = outputs.encoder_last_hidden_state
-                        del outputs.loss
-                        del outputs.logits
                         # accelerator.print(outputs.keys()) # dict_keys(['loss', 'logits', 'encoder_last_hidden_state'])
-                        del outputs
 
                         labels_without_negative_values = batch['labels'].clone()
                         labels_without_negative_values[labels_without_negative_values == -100] = tokenizer.pad_token_id
@@ -1185,21 +1180,15 @@ def main():
                             input_ in highlights]
                         features = data_collator(model_inputs)
                         features = features.to(accelerator.device)
-                        outputs = model(**features)
+                        label_encoder_last_hidden_states = model.get_encoder()(input_ids=features['input_ids'], attention_mask=features['attention_mask']).last_hidden_state
                         features = features.to('cpu')
                         del features
-                        label_encoder_last_hidden_states = outputs.encoder_last_hidden_state
-                        del outputs.past_key_values
-                        del outputs.logits
                         # accelerator.print(outputs.keys()) # dict_keys(['logits', 'past_key_values', 'encoder_last_hidden_state'])
-                        del outputs
 
                         inputs, contrastive_loss = contrastive_cluster_prompt(batch, encoder_last_hidden_states, label_encoder_last_hidden_states)
-                        # del encoder_last_hidden_states
-                        # del label_encoder_last_hidden_states
 
-                        with torch.cuda.device(accelerator.device):
-                            torch.cuda.empty_cache()
+                        # with torch.cuda.device(accelerator.device):
+                        #     torch.cuda.empty_cache()
 
                         inputs = [prefix + inp for inp in inputs]
                         model_inputs = [
@@ -1224,8 +1213,13 @@ def main():
                             accelerator.log({"batch_gen_loss": gen_loss, "batch_contrastive_loss": log_contrastive_loss}, step=completed_steps)
                             total_loss += gen_loss
                             total_contrastive_loss += log_contrastive_loss
+                        # del outputs
+                        # del contrastive_loss
+                        # del encoder_last_hidden_states
+                        # del label_encoder_last_hidden_states
 
                     elif args.model_type == "BartForConditionalGenerationWithRouge1":
+                        outputs = model(**batch)
                         abs_loss = outputs.loss
                         masked_ext_rouge1_loss = outputs.masked_ext_rouge1_loss
                         # We keep track of the loss at each epoch
@@ -1234,6 +1228,7 @@ def main():
                             total_ext_rouge1_loss += masked_ext_rouge1_loss.detach().float()
                         loss = abs_loss + masked_ext_rouge1_loss
                     elif args.model_type == "BartForConditionalGenerationWithRouge1Rouge2":
+                        outputs = model(**batch)
                         abs_loss = outputs.loss
                         masked_ext_rouge1_loss = outputs.masked_ext_rouge1_loss
                         masked_ext_rouge2_loss = outputs.masked_ext_rouge2_loss
@@ -1244,6 +1239,7 @@ def main():
                             total_ext_rouge2_loss += masked_ext_rouge2_loss.detach().float()
                         loss = abs_loss + masked_ext_rouge1_loss + masked_ext_rouge2_loss
                     else:
+                        outputs = model(**batch)
                         loss = outputs.loss
                         # We keep track of the loss at each epoch
                         if args.with_tracking:
