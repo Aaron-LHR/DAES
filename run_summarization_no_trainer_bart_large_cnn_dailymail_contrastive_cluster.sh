@@ -2,10 +2,11 @@ accelerate launch run_summarization_no_trainer.py \
     --model_name_or_path facebook/bart-large \
     --dataset_name cnn_dailymail \
     --dataset_config "3.0.0" \
-    --output_dir model/bart_large_cnn-dailymail_kmeans_contrastive \
+    --output_dir model/bart_large_cnn-dailymail_kmeans_contrastive1 \
     --per_device_train_batch_size 3 \
     --per_device_eval_batch_size 6 \
-    --learning_rate 3e-5 \
+    --gradient_accumulation_steps 2 \
+    --learning_rate 6e-5 \
     --num_train_epochs 5 \
     --lr_scheduler_type linear \
     --num_warmup_steps 500 \
@@ -14,7 +15,7 @@ accelerate launch run_summarization_no_trainer.py \
     --checkpointing_steps epoch \
     --max_target_length 256 \
     --num_beams 4 \
-    --preprocessing_num_workers 40 \
+    --preprocessing_num_workers 20 \
     --encoder_prompt contrastive_kmeans \
     --with_tracking \
     --report_to wandb

@@ -537,6 +537,8 @@ def main():
                 from_tf=bool(".ckpt" in args.model_name_or_path),
                 config=config,
             )
+            if args.encoder_prompt == "kmeans" or args.encoder_prompt == "contrastive_kmeans":
+                encoder = model.get_encoder()
     else:
         logger.info("Training new model from scratch")
         model = AutoModelForSeq2SeqLM.from_config(config)
@@ -590,21 +592,21 @@ def main():
         example[summary_column] = ' '.join([x for x in example[summary_column].split(' ') if x != ''])
         return example
 
+    from rouge_score import rouge_scorer
+    scorer = rouge_scorer.RougeScorer(['rouge2'], use_stemmer=True)
     def dataset_filter(example):
         from nltk.tokenize import sent_tokenize
         tmp_ids = tokenizer(example[text_column], max_length=args.max_source_length, truncation=True).input_ids
         article = tokenizer.decode(tmp_ids)
         article_sents = sent_tokenize(article)
-        # highlights_sents = sent_tokenize(example[summary_column])
-        highlights_sents = example[summary_column].split('\n')
+        highlights_sents = sent_tokenize(example[summary_column])
+        # highlights_sents = example[summary_column].split('\n')
         if len(article_sents) <= 3:
             return False
 
         if any([len([t for t in x.split(' ') if t != '']) < 4 for x in example[summary_column].split('\n')]):
             return False
 
-        from rouge_score import rouge_scorer
-        scorer = rouge_scorer.RougeScorer(['rouge2'], use_stemmer=True)
         flag = 0
         for i, article_sent in enumerate(article_sents):
             rouges = []
@@ -705,8 +707,6 @@ def main():
         article_sents = sent_tokenize(example[text_column])
         highlights_sents = sent_tokenize(example[summary_column])
 
-        from rouge_score import rouge_scorer
-        scorer = rouge_scorer.RougeScorer(['rouge2'], use_stemmer=True)
         for i, article_sent in enumerate(article_sents):
             rouges = []
             for j, highlights_sent in enumerate(highlights_sents):
@@ -727,7 +727,7 @@ def main():
         targets = examples[summary_column]
         for punctuation in punctuations:
             targets = [inp.replace(f'{punctuation} ', f'{punctuation}').replace(f'{punctuation}', f'{punctuation} ') for inp in targets]
-        # targets = [x.replace("\n", "") for x in targets]
+        targets = [x.replace("\n", "") for x in targets] # 很重要，能影响三个点，摘要里不能加\n
         targets = [' ' + inp.lstrip() for inp in targets]
         inputs = [prefix + inp for inp in inputs]
         model_inputs = tokenizer(inputs, max_length=args.max_source_length, padding=padding, truncation=True)
@@ -822,8 +822,6 @@ def main():
             articles.append(article)
         return articles
 
-    from rouge_score import rouge_scorer
-    scorer = rouge_scorer.RougeScorer(['rouge2'], use_stemmer=True)
     def rouge_related_contrastive_loss(article_sents, article_embeddings, highlights_sents, highlight_embeddings):
         from ContrastiveLoss import ContrastiveLoss
         contrastive_loss_fn = ContrastiveLoss()
@@ -874,7 +872,7 @@ def main():
 
             label_input_ids = batch.labels[article_index]
             label_encoder_last_hidden_state = label_encoder_last_hidden_states[article_index]
-            highlight, highlights_sents, highlight_embeddings = split_sent_embedding_from_outputs(label_input_ids, label_encoder_last_hidden_state, first_use_n=True)
+            highlight, highlights_sents, highlight_embeddings = split_sent_embedding_from_outputs(label_input_ids, label_encoder_last_hidden_state, first_use_n=False)
 
             contrastive_loss = rouge_related_contrastive_loss(sents, embeddings, highlights_sents, highlight_embeddings)
             contrastive_losses.append(contrastive_loss)
@@ -1053,6 +1051,10 @@ def main():
         model, optimizer, train_dataloader, eval_dataloader, target_domain_eval_dataloader, lr_scheduler = accelerator.prepare(
             model, optimizer, train_dataloader, eval_dataloader, target_domain_eval_dataloader, lr_scheduler
         )
+    elif args.encoder_prompt == "kmeans" or args.encoder_prompt == "contrastive_kmeans":
+        model, encoder, optimizer, train_dataloader, eval_dataloader, lr_scheduler = accelerator.prepare(
+            model, encoder, optimizer, train_dataloader, eval_dataloader, lr_scheduler
+        )
     else:
         # Prepare everything with our `accelerator`.
         model, optimizer, train_dataloader, eval_dataloader, lr_scheduler = accelerator.prepare(
@@ -1146,7 +1148,7 @@ def main():
 
                 with accelerator.accumulate(model):
                     if args.encoder_prompt == "kmeans":
-                        encoder_last_hidden_states = model.get_encoder()(input_ids=batch['input_ids'], attention_mask=batch['attention_mask']).last_hidden_state.to('cpu')
+                        encoder_last_hidden_states = encoder(input_ids=batch['input_ids'], attention_mask=batch['attention_mask']).last_hidden_state.to('cpu')
                         batch = batch.to('cpu')
                         # accelerator.print(outputs.keys()) # dict_keys(['loss', 'logits', 'encoder_last_hidden_state'])
                         inputs = cluster_prompt(batch, encoder_last_hidden_states)
@@ -1168,7 +1170,7 @@ def main():
                             total_loss += loss.cpu().detach().float()
 
                     elif args.encoder_prompt == "contrastive_kmeans":
-                        encoder_last_hidden_states = model.get_encoder()(input_ids=batch['input_ids'], attention_mask=batch['attention_mask']).last_hidden_state
+                        encoder_last_hidden_states = encoder(input_ids=batch['input_ids'], attention_mask=batch['attention_mask']).last_hidden_state
                         batch = batch.to('cpu')
                         # accelerator.print(outputs.keys()) # dict_keys(['loss', 'logits', 'encoder_last_hidden_state'])
 
@@ -1180,7 +1182,7 @@ def main():
                             input_ in highlights]
                         features = data_collator(model_inputs)
                         features = features.to(accelerator.device)
-                        label_encoder_last_hidden_states = model.get_encoder()(input_ids=features['input_ids'], attention_mask=features['attention_mask']).last_hidden_state
+                        label_encoder_last_hidden_states = encoder(input_ids=features['input_ids'], attention_mask=features['attention_mask']).last_hidden_state
                         features = features.to('cpu')
                         del features
                         # accelerator.print(outputs.keys()) # dict_keys(['logits', 'past_key_values', 'encoder_last_hidden_state'])

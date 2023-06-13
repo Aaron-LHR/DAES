@@ -14,7 +14,7 @@ accelerate launch run_summarization_no_trainer.py \
     --checkpointing_steps epoch \
     --max_target_length 256 \
     --num_beams 4 \
-    --preprocessing_num_workers 40 \
+    --preprocessing_num_workers 20 \
     --encoder_prompt kmeans \
     --with_tracking \
     --report_to wandb
