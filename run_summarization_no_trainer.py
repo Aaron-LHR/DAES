@@ -36,7 +36,7 @@ import datasets
 import nltk
 import numpy as np
 import torch
-from datasets import load_dataset, concatenate_datasets
+from datasets import load_dataset, concatenate_datasets, load_from_disk
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 import traceback
@@ -110,6 +110,18 @@ def parse_args():
         type=str,
         default=None,
         help="The configuration name of the dataset to use (via the datasets library).",
+    )
+    parser.add_argument(
+        "--cached_dataset_path",
+        type=str,
+        default=None,
+        help="The path datasets cached.",
+    )
+    parser.add_argument(
+        "--use_cached_dataset",
+        type=bool,
+        default=False,
+        help="If use cached dataset.",
     )
     parser.add_argument(
         "--target_domain_dataset_name",
@@ -336,6 +348,11 @@ def parse_args():
         help="Only do test",
     )
     parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Only do test",
+    )
+    parser.add_argument(
         "--resume_step",
         type=int,
         default=0,
@@ -394,6 +411,7 @@ def main():
         accelerator_log_kwargs["logging_dir"] = args.output_dir
 
     accelerator = Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps, **accelerator_log_kwargs)
+    accelerator.print(json.dumps(args.__dict__, indent=4, ensure_ascii=False, sort_keys=True))
     if args.source_prefix is None and args.model_name_or_path in [
         "t5-small",
         "t5-base",
@@ -576,6 +594,7 @@ def main():
                 f"--summary_column' value '{args.summary_column}' needs to be one of: {', '.join(column_names)}"
             )
 
+    punctuations = [',', '.', ';', '"', "'", '?', '!', ':']
     def clean(example):
         example[text_column] = unicodedata.normalize('NFKC', example[text_column])
         example[text_column] = ' '.join([x for x in example[text_column].split(' ') if x != ''])
@@ -590,6 +609,17 @@ def main():
 
         example[summary_column] = unicodedata.normalize('NFKC', example[summary_column])
         example[summary_column] = ' '.join([x for x in example[summary_column].split(' ') if x != ''])
+
+        for punctuation in punctuations:
+            example[text_column] = example[text_column].replace(f'{punctuation} ', f'{punctuation}').replace(f'{punctuation}', f'{punctuation} ')
+        example[text_column] = ' ' + example[text_column].lstrip()
+        example[text_column] = prefix + example[text_column]
+
+        for punctuation in punctuations:
+            example[summary_column] = example[summary_column].replace(f'{punctuation} ', f'{punctuation}').replace(f'{punctuation}', f'{punctuation} ')
+        example[summary_column] = example[summary_column].replace("\n", "")  # 很重要，能影响三个点，摘要里不能加\n
+        example[summary_column] = ' ' + example[summary_column].lstrip()
+
         return example
 
     from rouge_score import rouge_scorer
@@ -615,14 +645,14 @@ def main():
                 rouges.append((j + 1, score))
             rouges = sorted(rouges, key=lambda x: x[1], reverse=True)
             if rouges[0][1] > 0:
-                article_sents[i] = f'[{rouges[0][0]}] {article_sents[i]} [/{rouges[0][0]}]'
                 flag = 1
         return flag > 0
 
-    accelerator.print(raw_datasets)
-    raw_datasets = raw_datasets.map(clean, num_proc=args.preprocessing_num_workers)
-    raw_datasets = raw_datasets.filter(dataset_filter, num_proc=args.preprocessing_num_workers)
-    accelerator.print(raw_datasets)
+    if not args.use_cached_dataset:
+        accelerator.print(raw_datasets)
+        raw_datasets = raw_datasets.map(clean, num_proc=args.preprocessing_num_workers)
+        raw_datasets = raw_datasets.filter(dataset_filter, num_proc=args.preprocessing_num_workers)
+        accelerator.print(raw_datasets)
 
     if args.target_domain_dataset_name is not None:
         target_domain_dataset_columns = summarization_name_mapping.get(args.target_domain_dataset_name, None)
@@ -718,20 +748,11 @@ def main():
         example[text_column] = ' '.join(article_sents)
         return example
 
-    punctuations = [',', '.', ';', '"', "'", '?', '!', ':']
     def preprocess_function(examples):
         inputs = examples[text_column]
-        for punctuation in punctuations:
-            inputs = [inp.replace(f'{punctuation} ', f'{punctuation}').replace(f'{punctuation}', f'{punctuation} ') for inp in inputs]
-        inputs = [' ' + inp.lstrip() for inp in inputs]
-        targets = examples[summary_column]
-        for punctuation in punctuations:
-            targets = [inp.replace(f'{punctuation} ', f'{punctuation}').replace(f'{punctuation}', f'{punctuation} ') for inp in targets]
-        targets = [x.replace("\n", "") for x in targets] # 很重要，能影响三个点，摘要里不能加\n
-        targets = [' ' + inp.lstrip() for inp in targets]
-        inputs = [prefix + inp for inp in inputs]
         model_inputs = tokenizer(inputs, max_length=args.max_source_length, padding=padding, truncation=True)
 
+        targets = examples[summary_column]
         # Tokenize targets with the `text_target` keyword argument
         labels = tokenizer(text_target=targets, max_length=max_target_length, padding=padding, truncation=True)
 
@@ -785,7 +806,7 @@ def main():
                     sent = ' ' + sent
                 sent_len = len(tokenizer(sent).input_ids) - 2
                 sentence_embedding = encoder_last_hidden_state[start_position: start_position + sent_len]
-                print('sentence_embedding')
+                print('--------sentence_embedding--------')
                 print(sentence_embedding)
                 print(sentence_embedding.size())
                 print(sent)
@@ -794,9 +815,12 @@ def main():
                 print(input_ids[start_position: start_position + sent_len])
                 print(tokenizer.decode(input_ids[start_position: start_position + sent_len], skip_special_tokens=False))
                 start_position += sent_len
+            print('--------encoder_last_hidden_state--------')
             print(input_ids)
             print(np_emb)
             print(encoder_last_hidden_state)
+            if args.debug:
+                raise ValueError("模型输出不符合预期")
             return ' '.join(sents)
 
         # km_labels = km.labels_
@@ -860,6 +884,8 @@ def main():
             print(article_embeddings)
             print(highlights_sents)
             print(highlight_embeddings)
+            if args.debug:
+                raise ValueError("对比学习不符合预期")
             return torch.tensor(0.0).to(accelerator.device)
         return contrastive_loss
 
@@ -932,44 +958,49 @@ def main():
             summarys.append(get_subject_verb_obj_new_label(summary))
         return {summary_column: summarys}
 
-    with accelerator.main_process_first():
-        if args.decoder_prompt == "svo":
-            prompt_sep_token = "Summary:"
-            # tokenizer.add_special_tokens({"additional_special_tokens": [prompt_sep_token]})
-            # prompt_sep_token_id = tokenizer.convert_tokens_to_ids(prompt_sep_token)
-            raw_datasets = raw_datasets.map(
-                batch_map_all_subject_verb_obj,
-                batched=True,
-                num_proc=args.preprocessing_num_workers,
-                load_from_cache_file=True,
-                desc="Running svo on dataset",
-            )
+    if not args.use_cached_dataset:
+        with accelerator.main_process_first():
+            if args.decoder_prompt == "svo":
+                prompt_sep_token = "Summary:"
+                # tokenizer.add_special_tokens({"additional_special_tokens": [prompt_sep_token]})
+                # prompt_sep_token_id = tokenizer.convert_tokens_to_ids(prompt_sep_token)
+                raw_datasets = raw_datasets.map(
+                    batch_map_all_subject_verb_obj,
+                    batched=True,
+                    num_proc=args.preprocessing_num_workers,
+                    load_from_cache_file=True,
+                    desc="Running svo on dataset",
+                )
 
-        if args.encoder_prompt == "rouge":
-            raw_datasets = raw_datasets.map(
-                get_rouge_prompt_article,
-                num_proc=args.preprocessing_num_workers,
-                load_from_cache_file=True,
-                desc="Running knn prompt on dataset",
-            )
+            if args.encoder_prompt == "rouge":
+                raw_datasets = raw_datasets.map(
+                    get_rouge_prompt_article,
+                    num_proc=args.preprocessing_num_workers,
+                    load_from_cache_file=True,
+                    desc="Running knn prompt on dataset",
+                )
 
-        processed_datasets = raw_datasets.map(
-            preprocess_function,
-            batched=True,
-            num_proc=args.preprocessing_num_workers,
-            remove_columns=column_names,
-            load_from_cache_file=True,
-            desc="Running tokenizer on dataset",
-        )
-        if args.target_domain_dataset_name is not None:
-            processed_target_domain_datasets = target_domain_raw_datasets.map(
+            processed_datasets = raw_datasets.map(
                 preprocess_function,
                 batched=True,
                 num_proc=args.preprocessing_num_workers,
                 remove_columns=column_names,
                 load_from_cache_file=True,
-                desc="Running tokenizer on target domain dataset",
+                desc="Running tokenizer on dataset",
             )
+            if args.target_domain_dataset_name is not None:
+                processed_target_domain_datasets = target_domain_raw_datasets.map(
+                    preprocess_function,
+                    batched=True,
+                    num_proc=args.preprocessing_num_workers,
+                    remove_columns=column_names,
+                    load_from_cache_file=True,
+                    desc="Running tokenizer on target domain dataset",
+                )
+            processed_datasets.save_to_disk(args.cached_dataset_path)
+
+    if args.use_cached_dataset:
+        processed_datasets = load_from_disk(args.cached_dataset_path)
 
     train_dataset = processed_datasets["train"]
     eval_dataset = processed_datasets["test"]
@@ -1205,10 +1236,14 @@ def main():
                         batch = batch.to('cpu')
                         del batch
                         # contrastive_loss = contrastive_loss.to(accelerator.device)
-                        loss = outputs.loss + contrastive_loss
+                        if torch.isnan(contrastive_loss).any().item():  # 有 nan 值
+                            loss = outputs.loss
+                        else:
+                            loss = outputs.loss + contrastive_loss
                         # We keep track of the loss at each epoch
-                        # print(f'gen loss: {outputs.loss.cpu().detach().float()}')
-                        # print(f'contrastive_loss loss: {contrastive_loss.cpu().detach().float()}')
+                        if args.debug:
+                            print(f'gen loss: {outputs.loss.cpu().detach().float()}')
+                            print(f'contrastive_loss loss: {contrastive_loss.cpu().detach().float()}')
                         if args.with_tracking:
                             gen_loss = outputs.loss.cpu().detach().float()
                             log_contrastive_loss = contrastive_loss.cpu().detach().float()

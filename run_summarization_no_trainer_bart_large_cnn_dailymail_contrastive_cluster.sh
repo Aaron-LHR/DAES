@@ -1,6 +1,8 @@
 accelerate launch run_summarization_no_trainer.py \
     --model_name_or_path facebook/bart-large \
     --dataset_name cnn_dailymail \
+    --use_cached_dataset '' \
+    --cached_dataset_path data/cnn-dailymail_kmeans_contrastive \
     --dataset_config "3.0.0" \
     --output_dir model/bart_large_cnn-dailymail_kmeans_contrastive1 \
     --per_device_train_batch_size 3 \
