@@ -124,6 +124,12 @@ def parse_args():
         help="If use cached dataset.",
     )
     parser.add_argument(
+        "--filtered_dataset_path",
+        type=str,
+        default=None,
+        help="The path datasets cached.",
+    )
+    parser.add_argument(
         "--target_domain_dataset_name",
         type=str,
         default=None,
@@ -404,7 +410,7 @@ def main():
     accelerator_log_kwargs = {}
 
     from bart_with_ext import BartForConditionalGenerationWithRougeClass, BartForConditionalGenerationWithRouge1, BartForConditionalGenerationWithRouge1Rouge2
-    from DataCollatorForBartForConditionalGenerationWithRouge import DataCollatorForBartForConditionalGenerationWithRouge
+    from DataCollatorForBartForConditionalGenerationWithRouge import DataCollatorForBartForConditionalGenerationWithRouge, DataCollatorForMaskRouge
 
     if args.with_tracking:
         accelerator_log_kwargs["log_with"] = args.report_to
@@ -648,11 +654,16 @@ def main():
                 flag = 1
         return flag > 0
 
+    accelerator.print(raw_datasets)
     if not args.use_cached_dataset:
-        accelerator.print(raw_datasets)
-        raw_datasets = raw_datasets.map(clean, num_proc=args.preprocessing_num_workers)
-        raw_datasets = raw_datasets.filter(dataset_filter, num_proc=args.preprocessing_num_workers)
-        accelerator.print(raw_datasets)
+        try:
+            raw_datasets = load_from_disk(args.filtered_dataset_path)
+        except:
+            with accelerator.main_process_first():
+                raw_datasets = raw_datasets.map(clean, num_proc=args.preprocessing_num_workers)
+                raw_datasets = raw_datasets.filter(dataset_filter, num_proc=args.preprocessing_num_workers)
+            raw_datasets.save_to_disk(args.filtered_dataset_path)
+    accelerator.print(raw_datasets)
 
     if args.target_domain_dataset_name is not None:
         target_domain_dataset_columns = summarization_name_mapping.get(args.target_domain_dataset_name, None)
@@ -748,6 +759,84 @@ def main():
         example[text_column] = ' '.join(article_sents)
         return example
 
+    def get_lightweight_rouge_prompt_article(example):
+        from nltk.tokenize import sent_tokenize
+        article_sents = sent_tokenize(example[text_column])
+
+        for i, article_sent in enumerate(article_sents):
+            score = scorer.score(example[summary_column], article_sent)["rouge2"].fmeasure
+            if score > 0:
+                article_sents[i] = f'[ {article_sents[i]} ]'
+        example[text_column] = ' '.join(article_sents)
+        return example
+
+    mask_text_column = 'mask_text'
+    mask_label_colume = 'mask_label'
+    def get_mask_rouge_prompt_article(example):
+        from nltk.tokenize import sent_tokenize
+        article_sents = sent_tokenize(example[text_column])
+        highlights_sents = sent_tokenize(example[summary_column])
+        mask_label_sents = []
+
+        for i, article_sent in enumerate(article_sents):
+            rouges = []
+            for j, highlights_sent in enumerate(highlights_sents):
+                score = scorer.score(highlights_sent, article_sent)["rouge2"].fmeasure
+                rouges.append((j + 1, score))
+            rouges = sorted(rouges, key=lambda x: x[1], reverse=True)
+            if rouges[0][1] > 0:
+                mask_label_sent = f'[{rouges[0][0]}] {article_sents[i]} [/{rouges[0][0]}]'
+            else:
+                mask_label_sent = article_sents[i]
+            mask_label_sents.append(mask_label_sent)
+            article_sents[i] = f'{tokenizer.mask_token}{article_sents[i]}'
+        example[text_column] = ' '.join(article_sents) + f'{tokenizer.mask_token}'
+        example[mask_label_colume] = ' '.join(mask_label_sents)
+        return example
+
+    def get_mask_rouge_prompt_article_lightweight(example):
+        from nltk.tokenize import sent_tokenize
+        article_sents = sent_tokenize(example[text_column])
+        mask_label_sents = []
+
+        for i, article_sent in enumerate(article_sents):
+            score = scorer.score(example[summary_column], article_sent)["rouge2"].fmeasure
+            if score > 0:
+                mask_label_sent = f'[ {article_sents[i]} ]'
+            else:
+                mask_label_sent = article_sents[i]
+            mask_label_sents.append(mask_label_sent)
+            article_sents[i] = f'{tokenizer.mask_token}{article_sents[i]}'
+        example[mask_text_column] = ' '.join(article_sents) + f'{tokenizer.mask_token}'
+        example[mask_label_colume] = ' '.join(mask_label_sents)
+        return example
+
+    def get_mask_rouge_prompt_article_step1(example):
+        from nltk.tokenize import sent_tokenize
+        article_sents = sent_tokenize(example[text_column])
+        highlights_sents = sent_tokenize(example[summary_column])
+        mask_label_sents = []
+
+        for i, article_sent in enumerate(article_sents):
+            rouges = []
+            for j, highlights_sent in enumerate(highlights_sents):
+                score = scorer.score(highlights_sent, article_sent)["rouge2"].fmeasure
+                rouges.append((j + 1, score))
+            rouges = sorted(rouges, key=lambda x: x[1], reverse=True)
+            if rouges[0][1] > 0:
+                mask_label_sent = f'[{rouges[0][0]}] {article_sents[i]} [/{rouges[0][0]}]'
+            else:
+                mask_label_sent = article_sents[i]
+            mask_label_sents.append(mask_label_sent)
+            article_sents[i] = f'{tokenizer.mask_token}{article_sents[i]}'
+        example[text_column] = ' '.join(article_sents) + f'{tokenizer.mask_token}'
+        example[summary_column] = ' '.join(mask_label_sents)
+        return example
+
+    max_mask_target_length = args.max_source_length
+    mask_input_ids_name = "mask_input_ids"
+    mask_attention_mask_name = "mask_attention_mask"
+    mask_labels_ids_name = "mask_labels"
     def preprocess_function(examples):
         inputs = examples[text_column]
         model_inputs = tokenizer(inputs, max_length=args.max_source_length, padding=padding, truncation=True)
@@ -762,6 +851,23 @@ def main():
             labels["input_ids"] = [
                 [(l if l != tokenizer.pad_token_id else -100) for l in label] for label in labels["input_ids"]
             ]
+
+        if args.encoder_prompt == "mask_rouge" or args.encoder_prompt == "mask_rouge_lightweight":
+            mask_inputs = examples[mask_text_column]
+            mask_model_inputs = tokenizer(mask_inputs, max_length=args.max_source_length, padding=padding, truncation=True)
+
+            mask_targets = examples[mask_label_colume]
+            mask_labels = tokenizer(text_target=mask_targets, max_length=max_mask_target_length, padding=padding, truncation=True)
+
+            # If we are padding here, replace all tokenizer.pad_token_id in the labels by -100 when we want to ignore
+            # padding in the loss.
+            if padding == "max_length" and args.ignore_pad_token_for_loss:
+                mask_labels["input_ids"] = [
+                    [(l if l != tokenizer.pad_token_id else -100) for l in label] for label in mask_labels["input_ids"]
+                ]
+            model_inputs[mask_input_ids_name] = mask_model_inputs["input_ids"]
+            model_inputs[mask_attention_mask_name] = mask_model_inputs["attention_mask"]
+            model_inputs[mask_labels_ids_name] = mask_labels["input_ids"]
 
         model_inputs["labels"] = labels["input_ids"]
         if args.model_type == "BartForConditionalGenerationWithRouge1":
@@ -977,9 +1083,42 @@ def main():
                     get_rouge_prompt_article,
                     num_proc=args.preprocessing_num_workers,
                     load_from_cache_file=True,
-                    desc="Running knn prompt on dataset",
+                    desc="Running rouge prompt on dataset",
                 )
 
+            if args.encoder_prompt == "lightweight_rouge":
+                raw_datasets = raw_datasets.map(
+                    get_lightweight_rouge_prompt_article,
+                    num_proc=args.preprocessing_num_workers,
+                    load_from_cache_file=True,
+                    desc="Running rouge prompt on dataset",
+                )
+
+            if args.encoder_prompt == "mask_rouge":
+                raw_datasets = raw_datasets.map(
+                    get_mask_rouge_prompt_article,
+                    num_proc=args.preprocessing_num_workers,
+                    load_from_cache_file=True,
+                    desc="Running mask rouge prompt on dataset",
+                )
+
+            if args.encoder_prompt == "mask_rouge_lightweight":
+                raw_datasets = raw_datasets.map(
+                    get_mask_rouge_prompt_article_lightweight,
+                    num_proc=args.preprocessing_num_workers,
+                    load_from_cache_file=True,
+                    desc="Running mask rouge prompt lightweight on dataset",
+                )
+
+            if args.encoder_prompt == "mask_rouge_step1":
+                raw_datasets = raw_datasets.map(
+                    get_mask_rouge_prompt_article_step1,
+                    num_proc=args.preprocessing_num_workers,
+                    load_from_cache_file=True,
+                    desc="Running mask rouge prompt step1 on dataset",
+                )
+
+        with accelerator.main_process_first():
             processed_datasets = raw_datasets.map(
                 preprocess_function,
                 batched=True,
@@ -988,6 +1127,8 @@ def main():
                 load_from_cache_file=True,
                 desc="Running tokenizer on dataset",
             )
+            if args.encoder_prompt == "mask_rouge" or args.encoder_prompt == "mask_rouge_lightweight":
+                processed_datasets = processed_datasets.remove_columns([mask_text_column, mask_label_colume])
             if args.target_domain_dataset_name is not None:
                 processed_target_domain_datasets = target_domain_raw_datasets.map(
                     preprocess_function,
@@ -997,7 +1138,7 @@ def main():
                     load_from_cache_file=True,
                     desc="Running tokenizer on target domain dataset",
                 )
-            processed_datasets.save_to_disk(args.cached_dataset_path)
+        processed_datasets.save_to_disk(args.cached_dataset_path)
 
     if args.use_cached_dataset:
         processed_datasets = load_from_disk(args.cached_dataset_path)
@@ -1015,6 +1156,20 @@ def main():
     label_pad_token_id = -100 if args.ignore_pad_token_for_loss else tokenizer.pad_token_id
     if args.model_type in BartForConditionalGenerationWithRougeClass:
         data_collator = DataCollatorForBartForConditionalGenerationWithRouge(
+            tokenizer,
+            model=model,
+            label_pad_token_id=label_pad_token_id,
+            pad_to_multiple_of=8 if accelerator.use_fp16 else None,
+        )
+    elif args.encoder_prompt == "mask_rouge" or args.encoder_prompt == "mask_rouge_lightweight":
+        data_collator = DataCollatorForMaskRouge(
+            tokenizer,
+            model=model,
+            label_pad_token_id=label_pad_token_id,
+            pad_to_multiple_of=8 if accelerator.use_fp16 else None,
+        )
+        data_collator.mask_labels_ids_name = mask_labels_ids_name
+        second_data_collator = DataCollatorForSeq2Seq(
             tokenizer,
             model=model,
             label_pad_token_id=label_pad_token_id,
@@ -1157,11 +1312,11 @@ def main():
     for epoch in range(starting_epoch, args.num_train_epochs):
         if not args.test:
             model.train()
-            if args.with_tracking:
-                total_loss = 0
-                total_contrastive_loss = 0
-                total_ext_rouge1_loss = 0
-                total_ext_rouge2_loss = 0
+            total_loss = 0
+            total_contrastive_loss = 0
+            total_mask_loss = 0
+            total_ext_rouge1_loss = 0
+            total_ext_rouge2_loss = 0
             for step, batch in enumerate(train_dataloader):
                 # accelerator.print(batch.keys()) # ['input_ids', 'attention_mask', 'labels', 'decoder_input_ids']
                 # We need to skip steps until we reach the resumed step
@@ -1198,7 +1353,9 @@ def main():
                         del outputs
                         # We keep track of the loss at each epoch
                         if args.with_tracking:
-                            total_loss += loss.cpu().detach().float()
+                            log_gen_loss = loss.cpu().detach().float()
+                            accelerator.log({"batch_gen_loss": log_gen_loss}, step=completed_steps)
+                            total_loss += log_gen_loss
 
                     elif args.encoder_prompt == "contrastive_kmeans":
                         encoder_last_hidden_states = encoder(input_ids=batch['input_ids'], attention_mask=batch['attention_mask']).last_hidden_state
@@ -1243,17 +1400,71 @@ def main():
                         # We keep track of the loss at each epoch
                         if args.debug:
                             print(f'gen loss: {outputs.loss.cpu().detach().float()}')
-                            print(f'contrastive_loss loss: {contrastive_loss.cpu().detach().float()}')
+                            print(f'contrastive loss: {contrastive_loss.cpu().detach().float()}')
                         if args.with_tracking:
-                            gen_loss = outputs.loss.cpu().detach().float()
+                            log_gen_loss = outputs.loss.cpu().detach().float()
                             log_contrastive_loss = contrastive_loss.cpu().detach().float()
-                            accelerator.log({"batch_gen_loss": gen_loss, "batch_contrastive_loss": log_contrastive_loss}, step=completed_steps)
-                            total_loss += gen_loss
+                            accelerator.log({"batch_gen_loss": log_gen_loss, "batch_contrastive_loss": log_contrastive_loss}, step=completed_steps)
+                            total_loss += log_gen_loss
                             total_contrastive_loss += log_contrastive_loss
                         # del outputs
                         # del contrastive_loss
                         # del encoder_last_hidden_states
                         # del label_encoder_last_hidden_states
+                    elif args.encoder_prompt == "mask_rouge" or args.encoder_prompt == "mask_rouge_lightweight":
+                        # labels = batch['labels']
+                        # batch['labels'] = batch[mask_labels_ids_name]
+                        # del batch[mask_labels_ids_name]
+                        #
+                        # decoder_input_ids = batch['labels_decoder_input_ids']
+                        # batch['decoder_input_ids'] = batch[f"{mask_labels_ids_name}_decoder_input_ids"]
+                        # del batch[f"{mask_labels_ids_name}_decoder_input_ids"]
+                        # del batch['labels_decoder_input_ids']
+                        #
+                        # outputs = model(**batch)
+                        # mask_loss = outputs.loss
+                        #
+                        #
+                        # generated_tokens = accelerator.unwrap_model(model).generate(
+                        #     batch["input_ids"],
+                        #     attention_mask=batch["attention_mask"],
+                        #     **mask_gen_kwargs,
+                        # )
+                        # generated_tokens = generated_tokens.cpu().numpy()
+                        # if isinstance(generated_tokens, tuple):
+                        #     generated_tokens = generated_tokens[0]
+                        # decoded_preds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
+                        # inputs = [prefix + inp for inp in decoded_preds]
+                        # model_inputs = [
+                        #     tokenizer(input_, max_length=args.max_source_length, padding=padding, truncation=True) for
+                        #     input_ in inputs]
+                        # # todo decoder input ids
+                        # batch = second_data_collator(model_inputs)
+                        # batch['labels'] = labels
+                        # batch['decoder_input_ids'] = decoder_input_ids
+                        # batch = batch.to(accelerator.device)
+                        # outputs = model(**batch)
+                        # loss = outputs.loss + mask_loss
+                        ['input_ids', 'attention_mask', 'labels', 'decoder_input_ids']
+                        outputs = model(input_ids=batch['input_ids'], attention_mask=batch['attention_mask'],
+                                        labels=batch['labels'], decoder_input_ids=batch['labels_decoder_input_ids'])
+                        gen_loss = outputs.loss
+
+                        outputs = model(input_ids=batch[mask_input_ids_name], attention_mask=batch[mask_attention_mask_name],
+                                        labels=batch[mask_labels_ids_name], decoder_input_ids=batch[f"{mask_labels_ids_name}_decoder_input_ids"])
+                        mask_loss = outputs.loss
+
+                        loss = gen_loss + mask_loss
+
+                        if args.debug:
+                            print(f'gen loss: {gen_loss.cpu().detach().float()}')
+                            print(f'mask loss: {mask_loss.cpu().detach().float()}')
+                        if args.with_tracking:
+                            log_gen_loss = gen_loss.cpu().detach().float()
+                            log_mask_loss = mask_loss.cpu().detach().float()
+                            accelerator.log({"batch_gen_loss": log_gen_loss, "batch_mask_loss": log_mask_loss}, step=completed_steps)
+                            total_loss += log_gen_loss
+                            total_mask_loss += log_mask_loss
 
                     elif args.model_type == "BartForConditionalGenerationWithRouge1":
                         outputs = model(**batch)
@@ -1280,7 +1491,11 @@ def main():
                         loss = outputs.loss
                         # We keep track of the loss at each epoch
                         if args.with_tracking:
+                            log_gen_loss = loss.cpu().detach().float()
+                            accelerator.log({"batch_gen_loss": log_gen_loss}, step=completed_steps)
                             total_loss += loss.detach().float()
+                    if args.with_tracking:
+                        accelerator.log({"learning_rate": optimizer.param_groups[0]['lr']}, step=completed_steps)
                     accelerator.backward(loss)
                     optimizer.step()
                     lr_scheduler.step()
@@ -1328,6 +1543,29 @@ def main():
                     features = data_collator(model_inputs)
                     for key in ['input_ids', 'attention_mask']:
                         batch[key] = features[key]
+                    batch = batch.to(accelerator.device)
+
+                if args.encoder_prompt == "mask_rouge" or args.encoder_prompt == "mask_rouge_lightweight":
+                    labels = batch['labels']
+                    mask_gen_kwargs = {
+                        "max_length": max_mask_target_length,
+                        "num_beams": 1,
+                    }
+                    generated_tokens = accelerator.unwrap_model(model).generate(
+                        batch["input_ids"],
+                        attention_mask=batch["attention_mask"],
+                        **mask_gen_kwargs,
+                    )
+                    generated_tokens = generated_tokens.cpu().numpy()
+                    if isinstance(generated_tokens, tuple):
+                        generated_tokens = generated_tokens[0]
+                    decoded_preds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
+                    inputs = [prefix + inp for inp in decoded_preds]
+                    model_inputs = [
+                        tokenizer(input_, max_length=args.max_source_length, padding=padding, truncation=True) for
+                        input_ in inputs]
+                    batch = second_data_collator(model_inputs)
+                    batch["labels"] = labels
                     batch = batch.to(accelerator.device)
 
                 generated_tokens = accelerator.unwrap_model(model).generate(
@@ -1435,6 +1673,8 @@ def main():
                 result["train_loss"] = total_loss.item() / len(train_dataloader)  # 生成式loss
             if args.encoder_prompt == "contrastive_kmeans":
                 result["total_contrastive_loss"] = total_contrastive_loss.item() / len(train_dataloader)
+            if args.encoder_prompt == "mask_rouge" or args.encoder_prompt == "mask_rouge_lightweight":
+                result["total_mask_loss"] = total_mask_loss.item() / len(train_dataloader)
             result["epoch"] = epoch
             result["step"] = completed_steps
             if args.model_type == "BartForConditionalGenerationWithRouge1":
