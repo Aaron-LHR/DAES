@@ -36,7 +36,7 @@ import datasets
 import nltk
 import numpy as np
 import torch
-from datasets import load_dataset, concatenate_datasets, load_from_disk
+from datasets import load_dataset, concatenate_datasets, load_from_disk, Dataset, DatasetDict
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 import traceback
@@ -57,9 +57,11 @@ from transformers import (
     SchedulerType,
     get_scheduler,
 )
+from transformers.models.bart.modeling_bart import BartDecoder
 from transformers.utils import check_min_version, get_full_repo_name, is_offline_mode, send_example_telemetry
 from transformers.utils.versions import require_version
 
+from bart_with_ext import BartForConditionalGenerationWithMultiCLS
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.26.0")
@@ -280,6 +282,12 @@ def parse_args():
         default=5e-5,
         help="Initial learning rate (after the potential warmup period) to use.",
     )
+    parser.add_argument(
+        "--sep_learning_rate",
+        type=float,
+        default=5e-5,
+        help="Initial learning rate (after the potential warmup period) to use.",
+    )
     parser.add_argument("--weight_decay", type=float, default=0.0, help="Weight decay to use.")
     parser.add_argument("--num_train_epochs", type=int, default=3, help="Total number of training epochs to perform.")
     parser.add_argument(
@@ -349,9 +357,26 @@ def parse_args():
         help="encoder prompt options.",
     )
     parser.add_argument(
+        "--generated_dataset_path",
+        type=str,
+        default=None,
+        help="generated dataset path.",
+    )
+    parser.add_argument(
+        "--generate_mode",
+        action="store_true",
+        help="Only generate dataset",
+    )
+    parser.add_argument(
         "--test",
         action="store_true",
         help="Only do test",
+    )
+    parser.add_argument(
+        "--test_epoch",
+        type=str,
+        default=None,
+        help="test epoch dir.",
     )
     parser.add_argument(
         "--debug",
@@ -410,7 +435,7 @@ def main():
     accelerator_log_kwargs = {}
 
     from bart_with_ext import BartForConditionalGenerationWithRougeClass, BartForConditionalGenerationWithRouge1, BartForConditionalGenerationWithRouge1Rouge2
-    from DataCollatorForBartForConditionalGenerationWithRouge import DataCollatorForBartForConditionalGenerationWithRouge, DataCollatorForMaskRouge
+    from DataCollatorForBartForConditionalGenerationWithRouge import DataCollatorForBartForConditionalGenerationWithRouge, DataCollatorForMaskRouge, DataCollatorMultiCLS
 
     if args.with_tracking:
         accelerator_log_kwargs["log_with"] = args.report_to
@@ -502,10 +527,24 @@ def main():
     if args.config_name:
         config = AutoConfig.from_pretrained(args.config_name)
     elif args.model_name_or_path:
-        config = AutoConfig.from_pretrained(args.model_name_or_path, trust_remote_code=True)
+        if args.test:
+            config = AutoConfig.from_pretrained(args.output_dir)
+        else:
+            config = AutoConfig.from_pretrained(args.model_name_or_path, trust_remote_code=True)
     else:
         config = CONFIG_MAPPING[args.model_type]()
         logger.warning("You are instantiating a new config instance from scratch.")
+
+    if args.encoder_prompt == "multi_cls_step1":
+        cls_config = AutoConfig.from_pretrained('microsoft/deberta-v3-base', trust_remote_code=True)
+        for attr_name in dir(cls_config):
+            if hasattr(config, attr_name):
+                continue
+            attr_value = getattr(cls_config, attr_name)
+            accelerator.print(f"set attr '{attr_name}': '{attr_value}' to config")
+            setattr(config, attr_name, attr_value)
+
+    accelerator.print(config)
 
     if args.tokenizer_name:
         tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name, use_fast=not args.use_slow_tokenizer)
@@ -517,7 +556,8 @@ def main():
             "You can do it from another script, save it, and load it from here, using --tokenizer_name."
         )
 
-    if args.model_name_or_path:
+    cls_label_column = 'cls_labels'
+    if args.model_name_or_path:  # todo: test 的时候加载训练过的模型
         if args.model_type == "BartForConditionalGenerationWithRouge1":
             model = BartForConditionalGenerationWithRouge1.from_pretrained(
                 args.model_name_or_path,
@@ -555,14 +595,48 @@ def main():
             # add LoRA adaptor
             model = get_peft_model(model, lora_config)
             model.print_trainable_parameters()
+        elif args.encoder_prompt == "multi_cls_step1":
+            if args.test or args.generate_mode:
+                model = BartForConditionalGenerationWithMultiCLS.from_pretrained(
+                    f"{args.output_dir}/{args.test_epoch}/pytorch_model.bin",
+                    from_tf=bool(".ckpt" in args.model_name_or_path),
+                    config=config,
+                )
+                logger.info("Loading model from {args.output_dir}/{args.test_epoch}")
+            else:
+                model = BartForConditionalGenerationWithMultiCLS.from_pretrained(
+                    args.model_name_or_path,
+                    from_tf=bool(".ckpt" in args.model_name_or_path),
+                    config=config,
+                )
+            model.cls_label_column = cls_label_column
+            del model.model.decoder
+            del model.lm_head
         else:
-            model = AutoModelForSeq2SeqLM.from_pretrained(
+            if args.test:
+                model = AutoModelForSeq2SeqLM.from_pretrained(
+                    f"{args.output_dir}/{args.test_epoch}/pytorch_model.bin",
+                    from_tf=bool(".ckpt" in args.model_name_or_path),
+                    config=config,
+                )
+            else:
+                model = AutoModelForSeq2SeqLM.from_pretrained(
+                    args.model_name_or_path,
+                    from_tf=bool(".ckpt" in args.model_name_or_path),
+                    config=config,
+                )
+
+        if args.encoder_prompt == "kmeans" or args.encoder_prompt == "contrastive_kmeans":
+            encoder = model.get_encoder()
+
+        if args.encoder_prompt == "mask_rouge_lightweight_separate_decoder":
+            sep_model = AutoModelForSeq2SeqLM.from_pretrained(
                 args.model_name_or_path,
                 from_tf=bool(".ckpt" in args.model_name_or_path),
                 config=config,
             )
-            if args.encoder_prompt == "kmeans" or args.encoder_prompt == "contrastive_kmeans":
-                encoder = model.get_encoder()
+            sep_model.model.encoder = model.get_encoder()
+            sep_model.get_decoder().set_input_embeddings(model.get_encoder().embed_tokens)
     else:
         logger.info("Training new model from scratch")
         model = AutoModelForSeq2SeqLM.from_config(config)
@@ -763,15 +837,23 @@ def main():
         from nltk.tokenize import sent_tokenize
         article_sents = sent_tokenize(example[text_column])
 
+        point_flag = False
         for i, article_sent in enumerate(article_sents):
             score = scorer.score(example[summary_column], article_sent)["rouge2"].fmeasure
             if score > 0:
-                article_sents[i] = f'[ {article_sents[i]} ]'
+                if point_flag:
+                    article_sents[i] = f'{article_sents[i]} ]'
+                    article_sents[i - 1] = article_sents[i - 1][:-2]
+                else:
+                    article_sents[i] = f'[ {article_sents[i]} ]'
+                point_flag = True
+            else:
+                point_flag = False
         example[text_column] = ' '.join(article_sents)
         return example
 
     mask_text_column = 'mask_text'
-    mask_label_colume = 'mask_label'
+    mask_label_column = 'mask_label'
     def get_mask_rouge_prompt_article(example):
         from nltk.tokenize import sent_tokenize
         article_sents = sent_tokenize(example[text_column])
@@ -791,7 +873,7 @@ def main():
             mask_label_sents.append(mask_label_sent)
             article_sents[i] = f'{tokenizer.mask_token}{article_sents[i]}'
         example[text_column] = ' '.join(article_sents) + f'{tokenizer.mask_token}'
-        example[mask_label_colume] = ' '.join(mask_label_sents)
+        example[mask_label_column] = ' '.join(mask_label_sents)
         return example
 
     def get_mask_rouge_prompt_article_lightweight(example):
@@ -799,16 +881,40 @@ def main():
         article_sents = sent_tokenize(example[text_column])
         mask_label_sents = []
 
+        point_flag = False
         for i, article_sent in enumerate(article_sents):
             score = scorer.score(example[summary_column], article_sent)["rouge2"].fmeasure
             if score > 0:
-                mask_label_sent = f'[ {article_sents[i]} ]'
+                if point_flag:
+                    mask_label_sent = f'{article_sents[i]} ]'
+                    mask_label_sents[-1] = mask_label_sents[-1][:-2]
+                else:
+                    mask_label_sent = f'[ {article_sents[i]} ]'
+                point_flag = True
             else:
+                point_flag = False
                 mask_label_sent = article_sents[i]
             mask_label_sents.append(mask_label_sent)
             article_sents[i] = f'{tokenizer.mask_token}{article_sents[i]}'
         example[mask_text_column] = ' '.join(article_sents) + f'{tokenizer.mask_token}'
-        example[mask_label_colume] = ' '.join(mask_label_sents)
+        example[mask_label_column] = ' '.join(mask_label_sents)
+        return example
+
+    def get_mask_multi_cls(example):
+        from nltk.tokenize import sent_tokenize
+        article_sents = sent_tokenize(example[text_column])
+        cls_labels = []
+
+        for i, article_sent in enumerate(article_sents):
+            if len([x for x in article_sent.split(' ') if x.strip()]) > 2:
+                score = scorer.score(example[summary_column], article_sent)["rouge2"].fmeasure
+                if score > 0:
+                    cls_labels.append(1)
+                else:
+                    cls_labels.append(0)
+                article_sents[i] = f'{tokenizer.mask_token}{article_sents[i]}'
+        example[text_column] = ' '.join(article_sents)
+        example[cls_label_column] = cls_labels
         return example
 
     def get_mask_rouge_prompt_article_step1(example):
@@ -851,12 +957,27 @@ def main():
             labels["input_ids"] = [
                 [(l if l != tokenizer.pad_token_id else -100) for l in label] for label in labels["input_ids"]
             ]
+            model_inputs["labels"] = labels["input_ids"]
 
-        if args.encoder_prompt == "mask_rouge" or args.encoder_prompt == "mask_rouge_lightweight":
+        if args.encoder_prompt == "multi_cls_step1" and not args.generate_mode:
+            cls_labels = examples[cls_label_column]
+            model_inputs[cls_label_column] = []
+            for i, input_ids in enumerate(model_inputs['input_ids']):
+                cls_count = 0
+                cls_label = []
+                for token in input_ids:
+                    if token == tokenizer.mask_token_id:
+                        cls_label.append(cls_labels[i][cls_count])
+                        cls_count += 1
+                    else:
+                        cls_label.append(-100)
+                model_inputs[cls_label_column].append(cls_label)
+
+        if args.encoder_prompt == "mask_rouge" or args.encoder_prompt == "mask_rouge_lightweight" or args.encoder_prompt == "mask_rouge_lightweight_separate_decoder":
             mask_inputs = examples[mask_text_column]
             mask_model_inputs = tokenizer(mask_inputs, max_length=args.max_source_length, padding=padding, truncation=True)
 
-            mask_targets = examples[mask_label_colume]
+            mask_targets = examples[mask_label_column]
             mask_labels = tokenizer(text_target=mask_targets, max_length=max_mask_target_length, padding=padding, truncation=True)
 
             # If we are padding here, replace all tokenizer.pad_token_id in the labels by -100 when we want to ignore
@@ -869,7 +990,6 @@ def main():
             model_inputs[mask_attention_mask_name] = mask_model_inputs["attention_mask"]
             model_inputs[mask_labels_ids_name] = mask_labels["input_ids"]
 
-        model_inputs["labels"] = labels["input_ids"]
         if args.model_type == "BartForConditionalGenerationWithRouge1":
             model_inputs["ext_rouge1_labels"] = get_batch_sailent_scores_rouge1(model_inputs["input_ids"], model_inputs["labels"])
         elif args.model_type == "BartForConditionalGenerationWithRouge1Rouge2":
@@ -1102,12 +1222,20 @@ def main():
                     desc="Running mask rouge prompt on dataset",
                 )
 
-            if args.encoder_prompt == "mask_rouge_lightweight":
+            if args.encoder_prompt == "mask_rouge_lightweight" or args.encoder_prompt == "mask_rouge_lightweight_separate_decoder":
                 raw_datasets = raw_datasets.map(
                     get_mask_rouge_prompt_article_lightweight,
                     num_proc=args.preprocessing_num_workers,
                     load_from_cache_file=True,
                     desc="Running mask rouge prompt lightweight on dataset",
+                )
+
+            if args.encoder_prompt == "multi_cls_step1":
+                raw_datasets = raw_datasets.map(
+                    get_mask_multi_cls,
+                    num_proc=args.preprocessing_num_workers,
+                    load_from_cache_file=True,
+                    desc="Running cls lightweight on dataset",
                 )
 
             if args.encoder_prompt == "mask_rouge_step1":
@@ -1127,8 +1255,8 @@ def main():
                 load_from_cache_file=True,
                 desc="Running tokenizer on dataset",
             )
-            if args.encoder_prompt == "mask_rouge" or args.encoder_prompt == "mask_rouge_lightweight":
-                processed_datasets = processed_datasets.remove_columns([mask_text_column, mask_label_colume])
+            if args.encoder_prompt == "mask_rouge" or args.encoder_prompt == "mask_rouge_lightweight" or args.encoder_prompt == "mask_rouge_lightweight_separate_decoder":
+                processed_datasets = processed_datasets.remove_columns([mask_text_column, mask_label_column])
             if args.target_domain_dataset_name is not None:
                 processed_target_domain_datasets = target_domain_raw_datasets.map(
                     preprocess_function,
@@ -1142,6 +1270,16 @@ def main():
 
     if args.use_cached_dataset:
         processed_datasets = load_from_disk(args.cached_dataset_path)
+
+    if args.encoder_prompt == "multi_cls_step1":
+        if args.generate_mode:
+            train_generate_list = []
+            test_generate_list = []
+        else:
+            processed_datasets = processed_datasets.remove_columns(['labels'])
+
+    if args.encoder_prompt == "multi_cls_step2":
+        processed_datasets = processed_datasets.remove_columns([text_column, summary_column])
 
     train_dataset = processed_datasets["train"]
     eval_dataset = processed_datasets["test"]
@@ -1161,7 +1299,7 @@ def main():
             label_pad_token_id=label_pad_token_id,
             pad_to_multiple_of=8 if accelerator.use_fp16 else None,
         )
-    elif args.encoder_prompt == "mask_rouge" or args.encoder_prompt == "mask_rouge_lightweight":
+    elif args.encoder_prompt == "mask_rouge" or args.encoder_prompt == "mask_rouge_lightweight" or args.encoder_prompt == "mask_rouge_lightweight_separate_decoder":
         data_collator = DataCollatorForMaskRouge(
             tokenizer,
             model=model,
@@ -1175,6 +1313,14 @@ def main():
             label_pad_token_id=label_pad_token_id,
             pad_to_multiple_of=8 if accelerator.use_fp16 else None,
         )
+    elif args.encoder_prompt == "multi_cls_step1":
+        data_collator = DataCollatorMultiCLS(
+            tokenizer,
+            model=model,
+            label_pad_token_id=label_pad_token_id,
+            pad_to_multiple_of=8 if accelerator.use_fp16 else None,
+        )
+        data_collator.cls_label_column = cls_label_column
     else:
         data_collator = DataCollatorForSeq2Seq(
             tokenizer,
@@ -1214,6 +1360,39 @@ def main():
         },
     ]
     optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=args.learning_rate)
+    if args.encoder_prompt == "mask_rouge_lightweight_separate_decoder":
+        sep_optimizer_grouped_parameters = [
+            {
+                "params": [p for n, p in sep_model.named_parameters() if not any(nd in n for nd in no_decay)],
+                "weight_decay": args.weight_decay,
+            },
+            {
+                "params": [p for n, p in sep_model.named_parameters() if any(nd in n for nd in no_decay)],
+                "weight_decay": 0.0,
+            },
+        ]
+        sep_optimizer = torch.optim.AdamW(sep_optimizer_grouped_parameters, lr=args.sep_learning_rate)
+
+        # optimizer_grouped_parameters = [
+        #     {
+        #         "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
+        #         "weight_decay": args.weight_decay,
+        #     },
+        #     {
+        #         "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
+        #         "weight_decay": 0.0,
+        #     },
+        #     {
+        #         "params": [p for n, p in sep_model.get_decoder().named_parameters() if not any(nd in n for nd in no_decay) and n not in ['embed_tokens.weight']],
+        #         "weight_decay": args.weight_decay,
+        #     },
+        #     {
+        #         "params": [p for n, p in sep_model.get_decoder().named_parameters() if any(nd in n for nd in no_decay) and n not in ['embed_tokens.weight']],
+        #         "weight_decay": 0.0,
+        #     }
+        # ]
+        # optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=args.learning_rate)
+        #
 
     # Scheduler and math around the number of training steps.
     overrode_max_train_steps = False
@@ -1228,6 +1407,13 @@ def main():
         num_warmup_steps=args.num_warmup_steps * args.gradient_accumulation_steps,
         num_training_steps=args.max_train_steps * args.gradient_accumulation_steps,
     )
+    if args.encoder_prompt == "mask_rouge_lightweight_separate_decoder":
+        sep_lr_scheduler = get_scheduler(
+            name=args.lr_scheduler_type,
+            optimizer=sep_optimizer,
+            num_warmup_steps=args.num_warmup_steps * args.gradient_accumulation_steps,
+            num_training_steps=args.max_train_steps * args.gradient_accumulation_steps,
+        )
 
     if args.peft == "lora":
         from peft.utils.other import fsdp_auto_wrap_policy
@@ -1240,6 +1426,10 @@ def main():
     elif args.encoder_prompt == "kmeans" or args.encoder_prompt == "contrastive_kmeans":
         model, encoder, optimizer, train_dataloader, eval_dataloader, lr_scheduler = accelerator.prepare(
             model, encoder, optimizer, train_dataloader, eval_dataloader, lr_scheduler
+        )
+    elif args.encoder_prompt == "mask_rouge_lightweight_separate_decoder":
+        model, sep_model, optimizer, sep_optimizer, train_dataloader, eval_dataloader, lr_scheduler, sep_lr_scheduler = accelerator.prepare(
+            model, sep_model, optimizer, sep_optimizer, train_dataloader, eval_dataloader, lr_scheduler, sep_lr_scheduler
         )
     else:
         # Prepare everything with our `accelerator`.
@@ -1271,7 +1461,10 @@ def main():
 
     # Metric
     metric = evaluate.load("rouge")
-
+    if args.encoder_prompt == "mask_rouge_lightweight_separate_decoder":
+        sep_metric = evaluate.load("rouge")
+    if args.encoder_prompt == "multi_cls_step1":
+        acc_metric = evaluate.load("accuracy")
     # Train!
     total_batch_size = args.per_device_train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
 
@@ -1282,6 +1475,7 @@ def main():
     logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
     logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
     logger.info(f"  Total optimization steps = {args.max_train_steps}")
+
     # Only show the progress bar once on each machine.
     progress_bar = tqdm(range(args.max_train_steps), disable=not accelerator.is_local_main_process)
     completed_steps = 0
@@ -1312,7 +1506,9 @@ def main():
     for epoch in range(starting_epoch, args.num_train_epochs):
         if not args.test:
             model.train()
+            samples_seen = 0
             total_loss = 0
+            total_cls_loss = 0
             total_contrastive_loss = 0
             total_mask_loss = 0
             total_ext_rouge1_loss = 0
@@ -1377,7 +1573,7 @@ def main():
 
                         inputs, contrastive_loss = contrastive_cluster_prompt(batch, encoder_last_hidden_states, label_encoder_last_hidden_states)
 
-                        # with torch.cuda.device(accelerator.device):
+                        # with torch.cuda.device(accelerator.device):cls_forward
                         #     torch.cuda.empty_cache()
 
                         inputs = [prefix + inp for inp in inputs]
@@ -1407,10 +1603,61 @@ def main():
                             accelerator.log({"batch_gen_loss": log_gen_loss, "batch_contrastive_loss": log_contrastive_loss}, step=completed_steps)
                             total_loss += log_gen_loss
                             total_contrastive_loss += log_contrastive_loss
-                        # del outputs
-                        # del contrastive_loss
-                        # del encoder_last_hidden_states
-                        # del label_encoder_last_hidden_states
+
+                    elif args.encoder_prompt == "multi_cls_step1":  # todo: label smooth
+                        if args.generate_mode:
+                            with torch.no_grad():
+                                outputs = model(input_ids=batch['input_ids'], attention_mask=batch['attention_mask'],
+                                                labels=batch[cls_label_column], cls_mode=True)
+                                predictions = outputs.logits.argmax(dim=-1)
+                                references = batch[cls_label_column]
+                                if args.generate_mode:
+                                    input_idss, labels = accelerator.gather((batch['input_ids'], batch['labels']))
+                                predictions, references = accelerator.gather((predictions, references))
+                                # If we are in a multiprocess environment, the last batch has duplicates
+                                if accelerator.num_processes > 1:
+                                    if step == len(train_dataloader) - 1:
+                                        predictions = predictions[: len(train_dataloader.dataset) - samples_seen]
+                                        references = references[: len(train_dataloader.dataset) - samples_seen]
+                                    else:
+                                        samples_seen += references.shape[0]
+                                predictions = [[int(x) for j, x in enumerate(prediction) if references[i][j] != -100]
+                                               for i, prediction in enumerate(predictions)]
+                                references = [[int(x) for x in reference if x != -100] for reference in references]
+
+                                if args.generate_mode:
+                                    for example_index in range(len(predictions)):
+                                        input_ids = input_idss[example_index]
+                                        label = labels[example_index]
+                                        prediction = predictions[example_index]
+                                        # cls_label = references[example_index]
+                                        input_ids = [x for x in input_ids if x != tokenizer.pad_token_id]
+                                        # prediction = [x for i, x in enumerate(prediction) if cls_label[i] != -100]
+                                        label = [x for x in label if x != -100]
+                                        sents = tokenizer.decode(input_ids[1:-1]).split(tokenizer.mask_token)
+                                        highlight = tokenizer.decode(label, skip_special_tokens=True)
+                                        article_with_importance = [sents[0]]
+                                        importance_flag = False
+                                        for i, sent in enumerate(sents[1:]):
+                                            if prediction[i] == 1:
+                                                if importance_flag:
+                                                    article_with_importance[i] = article_with_importance[i][:-2]
+                                                else:
+                                                    sent = f'[ {sent}'
+                                                sent = f'{sent} ]'
+                                                importance_flag = True
+                                            else:
+                                                importance_flag = False
+                                            article_with_importance.append(sent)
+                                        article = ' '.join(article_with_importance)
+                                        train_generate_list.append({'article': article, 'highlights': highlight})
+                        else:
+                            outputs = model(input_ids=batch['input_ids'], attention_mask=batch['attention_mask'], labels=batch[cls_label_column], cls_mode=True)
+                            loss = outputs.loss
+                            if args.with_tracking:
+                                log_cls_loss = outputs.loss.cpu().detach().float()
+                                accelerator.log({"batch_cls_loss": log_cls_loss}, step=completed_steps)
+                                total_cls_loss += log_cls_loss
                     elif args.encoder_prompt == "mask_rouge" or args.encoder_prompt == "mask_rouge_lightweight":
                         # labels = batch['labels']
                         # batch['labels'] = batch[mask_labels_ids_name]
@@ -1445,7 +1692,6 @@ def main():
                         # batch = batch.to(accelerator.device)
                         # outputs = model(**batch)
                         # loss = outputs.loss + mask_loss
-                        ['input_ids', 'attention_mask', 'labels', 'decoder_input_ids']
                         outputs = model(input_ids=batch['input_ids'], attention_mask=batch['attention_mask'],
                                         labels=batch['labels'], decoder_input_ids=batch['labels_decoder_input_ids'])
                         gen_loss = outputs.loss
@@ -1463,6 +1709,34 @@ def main():
                             log_gen_loss = gen_loss.cpu().detach().float()
                             log_mask_loss = mask_loss.cpu().detach().float()
                             accelerator.log({"batch_gen_loss": log_gen_loss, "batch_mask_loss": log_mask_loss}, step=completed_steps)
+                            total_loss += log_gen_loss
+                            total_mask_loss += log_mask_loss
+
+                    elif args.encoder_prompt == "mask_rouge_lightweight_separate_decoder":
+                        outputs = sep_model(input_ids=batch[mask_input_ids_name],
+                                            attention_mask=batch[mask_attention_mask_name],
+                                            labels=batch[mask_labels_ids_name],
+                                            decoder_input_ids=batch[f"{mask_labels_ids_name}_decoder_input_ids"])
+                        mask_loss = outputs.loss
+                        accelerator.backward(mask_loss)
+                        sep_optimizer.step()
+                        sep_lr_scheduler.step()
+                        sep_optimizer.zero_grad()
+
+                        outputs = model(input_ids=batch['input_ids'], attention_mask=batch['attention_mask'],
+                                        labels=batch['labels'], decoder_input_ids=batch['labels_decoder_input_ids'])
+                        gen_loss = outputs.loss
+
+                        loss = gen_loss
+
+                        if args.debug:
+                            print(f'gen loss: {gen_loss.cpu().detach().float()}')
+                            print(f'mask loss: {mask_loss.cpu().detach().float()}')
+                        if args.with_tracking:
+                            log_gen_loss = gen_loss.cpu().detach().float()
+                            log_mask_loss = mask_loss.cpu().detach().float()
+                            accelerator.log({"batch_gen_loss": log_gen_loss, "batch_mask_loss": log_mask_loss, "mask_learning_rate": sep_optimizer.param_groups[0]['lr']},
+                                            step=completed_steps)
                             total_loss += log_gen_loss
                             total_mask_loss += log_mask_loss
 
@@ -1496,17 +1770,18 @@ def main():
                             total_loss += loss.detach().float()
                     if args.with_tracking:
                         accelerator.log({"learning_rate": optimizer.param_groups[0]['lr']}, step=completed_steps)
-                    accelerator.backward(loss)
-                    optimizer.step()
-                    lr_scheduler.step()
-                    optimizer.zero_grad()
+                    if not args.generate_mode:
+                        accelerator.backward(loss)
+                        optimizer.step()
+                        lr_scheduler.step()
+                        optimizer.zero_grad()
 
                 # Checks if the accelerator has performed an optimization step behind the scenes
                 if accelerator.sync_gradients:
                     progress_bar.update(1)
                     completed_steps += 1
 
-                if isinstance(checkpointing_steps, int):
+                if isinstance(checkpointing_steps, int) and not args.test:
                     if completed_steps % checkpointing_steps == 0:
                         output_dir = f"step_{completed_steps}"
                         if args.output_dir is not None:
@@ -1515,13 +1790,19 @@ def main():
 
                 if completed_steps >= args.max_train_steps:
                     break
+
         model.eval()
+        samples_seen = 0
         if args.val_max_target_length is None:
             args.val_max_target_length = args.max_target_length
 
         gen_kwargs = {
             "max_length": args.val_max_target_length if args is not None else config.max_length,
             "num_beams": args.num_beams,
+            # "early_stopping": args.early_stopping,
+            # "length_penalty": args.length_penalty,
+            # "min_length": args.min_length,
+            # "no_repeat_ngram_size": args.no_repeat_ngram_size
         }
         debug_flag = 1
         accelerator.print("eval" + "!" * 1000)
@@ -1545,6 +1826,54 @@ def main():
                         batch[key] = features[key]
                     batch = batch.to(accelerator.device)
 
+                if args.encoder_prompt == "multi_cls_step1":
+                    outputs = model(input_ids=batch['input_ids'], attention_mask=batch['attention_mask'], labels=batch[cls_label_column], cls_mode=True)
+                    predictions = outputs.logits.argmax(dim=-1)
+                    references = batch[cls_label_column]
+                    if args.generate_mode:
+                        input_idss, labels = accelerator.gather((batch['input_ids'], batch['labels']))
+                    predictions, references = accelerator.gather((predictions, references))
+                    # If we are in a multiprocess environment, the last batch has duplicates
+                    if accelerator.num_processes > 1:
+                        if step == len(eval_dataloader) - 1:
+                            predictions = predictions[: len(eval_dataloader.dataset) - samples_seen]
+                            references = references[: len(eval_dataloader.dataset) - samples_seen]
+                        else:
+                            samples_seen += references.shape[0]
+                    predictions = [[int(x) for j, x in enumerate(prediction) if references[i][j] != -100] for i, prediction in enumerate(predictions)]
+                    references = [[int(x) for x in reference if x != -100] for reference in references]
+                    acc_metric.add_batch(
+                        predictions=[i for item in predictions for i in item],
+                        references=[i for item in references for i in item],
+                    )
+                    if args.generate_mode:
+                        def remove_negative_100(t):
+                            return t[t != -100]
+                        for example_index in range(len(predictions)):
+                            input_ids = input_idss[example_index]
+                            label = labels[example_index]
+                            prediction = predictions[example_index]
+                            # cls_label = references[example_index]
+                            input_ids = [x for x in input_ids if x != tokenizer.pad_token_id]
+                            # prediction = [x for i, x in enumerate(prediction) if cls_label[i] != -100]
+                            label = [x for x in label if x != -100]
+                            sents = tokenizer.decode(input_ids[1:-1]).split(tokenizer.mask_token)
+                            highlight = tokenizer.decode(label, skip_special_tokens=True)
+                            article_with_importance = [sents[0]]
+                            importance_flag = False
+                            for i, sent in enumerate(sents[1:]):
+                                if prediction[i] == 1:
+                                    if importance_flag:
+                                        article_with_importance[i] = article_with_importance[i][:-2]
+                                    else:
+                                        sent = f'[ {sent}'
+                                    sent = f'{sent} ]'
+                                    importance_flag = True
+                                else:
+                                    importance_flag = False
+                                article_with_importance.append(sent)
+                            article = ' '.join(article_with_importance)
+                            test_generate_list.append({'article': article, 'highlights': highlight})
                 if args.encoder_prompt == "mask_rouge" or args.encoder_prompt == "mask_rouge_lightweight":
                     labels = batch['labels']
                     mask_gen_kwargs = {
@@ -1568,64 +1897,143 @@ def main():
                     batch["labels"] = labels
                     batch = batch.to(accelerator.device)
 
-                generated_tokens = accelerator.unwrap_model(model).generate(
-                    batch["input_ids"],
-                    attention_mask=batch["attention_mask"],
-                    **gen_kwargs,
-                )
+                # todo 使用 gold label 测一下二阶段模型的 ROUGE
+                if args.encoder_prompt == "mask_rouge_lightweight_separate_decoder":
+                    labels = batch['labels']
+                    mask_labels = batch[mask_labels_ids_name]
+                    mask_gen_kwargs = {
+                        "max_length": max_mask_target_length,
+                        "num_beams": 1,
+                    }
+                    sep_generated_tokens = accelerator.unwrap_model(sep_model).generate(
+                        batch["input_ids"],
+                        attention_mask=batch["attention_mask"],
+                        **mask_gen_kwargs,
+                    )
 
-                generated_tokens = accelerator.pad_across_processes(
-                    generated_tokens, dim=1, pad_index=tokenizer.pad_token_id
-                )
-                labels = batch["labels"]
-                if not args.pad_to_max_length:
-                    # If we did not pad to max length, we need to pad the labels too
-                    labels = accelerator.pad_across_processes(batch["labels"], dim=1, pad_index=tokenizer.pad_token_id)
-                batch = batch.to('cpu')
-                del batch
+                    sep_generated_tokens_for_test = sep_generated_tokens
+                    sep_generated_tokens = sep_generated_tokens.cpu().numpy()
+                    if isinstance(sep_generated_tokens, tuple):
+                        sep_generated_tokens = sep_generated_tokens[0]
+                    sep_decoded_preds = tokenizer.batch_decode(sep_generated_tokens, skip_special_tokens=True)
+                    # todo 加上 mask rouge 的测评
+                    inputs = [prefix + inp for inp in sep_decoded_preds]
+                    model_inputs = [
+                        tokenizer(input_, max_length=args.max_source_length, padding=padding, truncation=True) for
+                        input_ in inputs]
+                    batch = second_data_collator(model_inputs)
+                    batch["labels"] = labels
+                    batch = batch.to(accelerator.device)
 
-                generated_tokens, labels = accelerator.gather_for_metrics((generated_tokens, labels))
-                generated_tokens = generated_tokens.cpu().numpy()
-                labels = labels.cpu().numpy()
+                    sep_generated_tokens = accelerator.pad_across_processes(
+                        sep_generated_tokens_for_test, dim=1, pad_index=tokenizer.pad_token_id
+                    )
+                    if not args.pad_to_max_length:
+                        # If we did not pad to max length, we need to pad the labels too
+                        mask_labels = accelerator.pad_across_processes(mask_labels, dim=1,
+                                                                  pad_index=tokenizer.pad_token_id)
+                    sep_generated_tokens, mask_labels = accelerator.gather_for_metrics((sep_generated_tokens, mask_labels))
+                    sep_generated_tokens = sep_generated_tokens.cpu().numpy()
+                    mask_labels = mask_labels.cpu().numpy()
+                    if args.ignore_pad_token_for_loss:
+                        # Replace -100 in the labels as we can't decode them.
+                        mask_labels = np.where(mask_labels != -100, mask_labels, tokenizer.pad_token_id)
+                    if isinstance(sep_generated_tokens, tuple):
+                        sep_generated_tokens = sep_generated_tokens[0]
 
-                if args.ignore_pad_token_for_loss:
-                    # Replace -100 in the labels as we can't decode them.
-                    labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
-                if isinstance(generated_tokens, tuple):
-                    generated_tokens = generated_tokens[0]
+                    sep_decoded_preds = tokenizer.batch_decode(sep_generated_tokens, skip_special_tokens=True)
+                    sep_decoded_labels = tokenizer.batch_decode(mask_labels, skip_special_tokens=True)
 
-                decoded_preds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
-                decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
+                    sep_decoded_preds, sep_decoded_labels = postprocess_text(sep_decoded_preds, sep_decoded_labels)
 
-                decoded_preds, decoded_labels = postprocess_text(decoded_preds, decoded_labels)
-                if debug_flag:
-                    accelerator.print(f"==============epoch {epoch} raw_decoded_preds==============", file=debug_file)
-                    accelerator.print(decoded_preds, file=debug_file)
-                    accelerator.print(f"==============epoch {epoch} raw_decoded_labels==============", file=debug_file)
-                    accelerator.print(decoded_labels, file=debug_file)
-                    debug_file.flush()
-                if args.decoder_prompt == "svo":
-                    def mask_svo(t):
-                        pos = t.find(prompt_sep_token)
-                        return t[(pos + len(prompt_sep_token)) if pos != -1 else 0:].strip()
+                    sep_metric.add_batch(
+                        predictions=sep_decoded_preds,
+                        references=sep_decoded_labels,
+                    )
 
-                    decoded_preds = [mask_svo(x) for x in decoded_preds]
-                    decoded_labels = [mask_svo(x) for x in decoded_labels]
+                if args.encoder_prompt == "multi_cls_step1":
+                    pass
+                else:
+                    generated_tokens = accelerator.unwrap_model(model).generate(
+                        batch["input_ids"],
+                        attention_mask=batch["attention_mask"],
+                        **gen_kwargs,
+                    )
+
+                    generated_tokens = accelerator.pad_across_processes(
+                        generated_tokens, dim=1, pad_index=tokenizer.pad_token_id
+                    )
+                    labels = batch["labels"]
+                    if not args.pad_to_max_length:
+                        # If we did not pad to max length, we need to pad the labels too
+                        labels = accelerator.pad_across_processes(batch["labels"], dim=1, pad_index=tokenizer.pad_token_id)
+                    batch = batch.to('cpu')
+                    del batch
+
+                    generated_tokens, labels = accelerator.gather_for_metrics((generated_tokens, labels))
+                    generated_tokens = generated_tokens.cpu().numpy()
+                    labels = labels.cpu().numpy()
+
+                    if args.ignore_pad_token_for_loss:
+                        # Replace -100 in the labels as we can't decode them.
+                        labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
+                    if isinstance(generated_tokens, tuple):
+                        generated_tokens = generated_tokens[0]
+
+                    decoded_preds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
+                    decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
+
+                    decoded_preds, decoded_labels = postprocess_text(decoded_preds, decoded_labels)
                     if debug_flag:
-                        accelerator.print(f"==============epoch {epoch} decoded_preds==============", file=debug_file)
+                        accelerator.print(f"==============epoch {epoch} raw_decoded_preds==============", file=debug_file)
                         accelerator.print(decoded_preds, file=debug_file)
-                        accelerator.print(f"==============epoch {epoch} decoded_labels==============", file=debug_file)
+                        accelerator.print(f"==============epoch {epoch} raw_decoded_labels==============", file=debug_file)
                         accelerator.print(decoded_labels, file=debug_file)
                         debug_file.flush()
-                if debug_flag:
-                    debug_flag -= 1
+                    if args.decoder_prompt == "svo":
+                        def mask_svo(t):
+                            pos = t.find(prompt_sep_token)
+                            return t[(pos + len(prompt_sep_token)) if pos != -1 else 0:].strip()
 
-                metric.add_batch(
-                    predictions=decoded_preds,
-                    references=decoded_labels,
+                        decoded_preds = [mask_svo(x) for x in decoded_preds]
+                        decoded_labels = [mask_svo(x) for x in decoded_labels]
+                        if debug_flag:
+                            accelerator.print(f"==============epoch {epoch} decoded_preds==============", file=debug_file)
+                            accelerator.print(decoded_preds, file=debug_file)
+                            accelerator.print(f"==============epoch {epoch} decoded_labels==============", file=debug_file)
+                            accelerator.print(decoded_labels, file=debug_file)
+                            debug_file.flush()
+                    if debug_flag:
+                        debug_flag -= 1
+
+                    metric.add_batch(
+                        predictions=decoded_preds,
+                        references=decoded_labels,
+                    )
+        if args.encoder_prompt == "multi_cls_step1":
+            result = acc_metric.compute()
+            if args.generate_mode:
+                train_generated_dataset = Dataset.from_list(train_generate_list)
+                test_generated_dataset = Dataset.from_list(test_generate_list)
+                generated_dataset_dict = DatasetDict({"train": train_generated_dataset, "test": test_generated_dataset})
+                accelerator.print(generated_dataset_dict["train"][0])
+                accelerator.print(generated_dataset_dict)
+                generated_dataset_dict = generated_dataset_dict.map(
+                    preprocess_function,
+                    batched=True,
+                    num_proc=args.preprocessing_num_workers,
+                    load_from_cache_file=True,
+                    desc="Running tokenize on generated dataset",
                 )
-        result = metric.compute(use_stemmer=True)
-        result = {k: round(v * 100, 4) for k, v in result.items()}
+                generated_dataset_dict.save_to_disk(args.generated_dataset_path)
+        else:
+            result = metric.compute(use_stemmer=True)
+            result = {k: round(v * 100, 4) for k, v in result.items()}
+        if args.encoder_prompt == "mask_rouge_lightweight_separate_decoder":
+            sep_result = sep_metric.compute(use_stemmer=True)
+            sep_result = {k: round(v * 100, 4) for k, v in sep_result.items()}
+            for k, v in sep_result.items():
+                result[f'mask_{k}'] = v
 
         if args.target_domain_dataset_name is not None:
             for step, batch in enumerate(target_domain_eval_dataloader):
@@ -1669,8 +2077,10 @@ def main():
         logger.info(result)
 
         if args.with_tracking:
-            if not args.test:
+            if not args.test and args.encoder_prompt != "multi_cls_step1":
                 result["train_loss"] = total_loss.item() / len(train_dataloader)  # 生成式loss
+            if args.encoder_prompt == "multi_cls_step1":
+                result["total_cls_loss"] = total_cls_loss.item() / len(train_dataloader)
             if args.encoder_prompt == "contrastive_kmeans":
                 result["total_contrastive_loss"] = total_contrastive_loss.item() / len(train_dataloader)
             if args.encoder_prompt == "mask_rouge" or args.encoder_prompt == "mask_rouge_lightweight":
@@ -1686,7 +2096,7 @@ def main():
                 result["loss_sum"] = result["train_loss"] + result["total_ext_rouge1_loss"] + result["total_ext_rouge2_loss"]  # 生成式 + rouge 1 loss + rouge 2 loss
             accelerator.log(result, step=completed_steps)
 
-        if args.push_to_hub and epoch < args.num_train_epochs - 1:
+        if args.push_to_hub and epoch < args.num_train_epochs - 1 and not args.test:
             accelerator.wait_for_everyone()
             unwrapped_model = accelerator.unwrap_model(model)
             unwrapped_model.save_pretrained(
@@ -1698,18 +2108,23 @@ def main():
                     commit_message=f"Training in progress epoch {epoch}", blocking=False, auto_lfs_prune=True
                 )
 
-        if args.checkpointing_steps == "epoch":
+        if args.checkpointing_steps == "epoch" and not args.test:
             output_dir = f"epoch_{epoch}"
             if args.output_dir is not None:
                 output_dir = os.path.join(args.output_dir, output_dir)
             accelerator.save_state(output_dir)
 
-    if args.output_dir is not None:
+    if args.output_dir is not None and not args.test:
         accelerator.wait_for_everyone()
         unwrapped_model = accelerator.unwrap_model(model)
         unwrapped_model.save_pretrained(
             args.output_dir, is_main_process=accelerator.is_main_process, save_function=accelerator.save
         )
+        if args.encoder_prompt == "mask_rouge_lightweight_separate_decoder":
+            unwrapped_sep_model = accelerator.unwrap_model(sep_model)
+            unwrapped_sep_model.save_pretrained(
+                os.path.join(args.output_dir, 'sep'), is_main_process=accelerator.is_main_process, save_function=accelerator.save
+            )
         if accelerator.is_main_process:
             tokenizer.save_pretrained(args.output_dir)
             if args.push_to_hub:

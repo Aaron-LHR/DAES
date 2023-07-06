@@ -85,7 +85,7 @@ class ContextPoolerMultiCLS(nn.Module):
         # We "pool" the model by simply taking the hidden state corresponding
         # to the first token.
 
-        context_token = hidden_states[:, 0]
+        context_token = hidden_states
         context_token = self.dropout(context_token)
         pooled_output = self.dense(context_token)
         pooled_output = ACT2FN[self.config.pooler_hidden_act](pooled_output)
@@ -1404,7 +1404,7 @@ class DebertaV2ForMultiCLSSequenceClassification(DebertaV2PreTrainedModel):
         self.num_labels = num_labels
 
         self.deberta = DebertaV2Model(config)
-        self.pooler = ContextPooler(config)
+        self.pooler = ContextPoolerMultiCLS(config)
         output_dim = self.pooler.output_dim
 
         self.classifier = nn.Linear(output_dim, num_labels)

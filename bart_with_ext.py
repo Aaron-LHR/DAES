@@ -32,7 +32,7 @@ from transformers.modeling_outputs import (
     Seq2SeqLMOutput,
     Seq2SeqModelOutput,
     Seq2SeqQuestionAnsweringModelOutput,
-    Seq2SeqSequenceClassifierOutput,
+    Seq2SeqSequenceClassifierOutput, SequenceClassifierOutput,
 )
 from Seq2SeqWithExtLMOutput import Seq2SeqWithExtLMOutput
 from transformers.modeling_utils import PreTrainedModel
@@ -45,6 +45,8 @@ from transformers.utils import (
     replace_return_docstrings,
 )
 from transformers.models.bart.configuration_bart import BartConfig
+
+from ContrastiveLoss import ContrastiveLoss
 
 logger = logging.get_logger(__name__)
 
@@ -69,7 +71,11 @@ BART_PRETRAINED_MODEL_ARCHIVE_LIST = [
     # see all BART models at https://huggingface.co/models?filter=bart
 ]
 
-BartForConditionalGenerationWithRougeClass = {"BartForConditionalGenerationWithRouge1", "BartForConditionalGenerationWithRouge1Rouge2"}
+BartForConditionalGenerationWithRougeClass = {
+    "BartForConditionalGenerationWithRouge1",
+    "BartForConditionalGenerationWithRouge1Rouge2",
+    "ContrastiveBartForConditionalGenerationWithRouge1Rouge2"
+}
 
 def shift_tokens_right(input_ids: torch.Tensor, pad_token_id: int, decoder_start_token_id: int):
     """
@@ -1457,6 +1463,85 @@ class BartForConditionalGeneration(BartPretrainedModel):
         return reordered_past
 
 
+from deberta_v2_models import ContextPoolerMultiCLS, StableDropout
+@add_start_docstrings(
+    "The BART Model with a language modeling head. Can be used for summarization.", BART_START_DOCSTRING
+)
+class BartForConditionalGenerationWithMultiCLS(BartForConditionalGeneration):
+    def __init__(self, config):
+        super().__init__(config)
+
+        num_labels = 2
+        self.num_labels = num_labels
+        # config.pooler_hidden_size = config.d_model
+        # config.pooler_dropout = 0
+        self.pooler = ContextPoolerMultiCLS(config)
+        output_dim = self.pooler.output_dim
+
+        self.classifier = nn.Linear(output_dim, num_labels)
+        drop_out = getattr(config, "cls_dropout", None)
+        drop_out = self.config.dropout if drop_out is None else drop_out
+        self.dropout = StableDropout(drop_out)
+
+        # Initialize weights and apply final processing
+        self.post_init()
+
+    def forward(
+            self,
+            input_ids: torch.LongTensor = None,
+            attention_mask: Optional[torch.Tensor] = None,
+            decoder_input_ids: Optional[torch.LongTensor] = None,
+            decoder_attention_mask: Optional[torch.LongTensor] = None,
+            head_mask: Optional[torch.Tensor] = None,
+            decoder_head_mask: Optional[torch.Tensor] = None,
+            cross_attn_head_mask: Optional[torch.Tensor] = None,
+            encoder_outputs: Optional[List[torch.FloatTensor]] = None,
+            past_key_values: Optional[List[torch.FloatTensor]] = None,
+            inputs_embeds: Optional[torch.FloatTensor] = None,
+            decoder_inputs_embeds: Optional[torch.FloatTensor] = None,
+            labels: Optional[torch.LongTensor] = None,
+            use_cache: Optional[bool] = None,
+            output_attentions: Optional[bool] = None,
+            output_hidden_states: Optional[bool] = None,
+            return_dict: Optional[bool] = None,
+            cls_mode: Optional[bool] = None
+    ) -> Union[Tuple, SequenceClassifierOutput, Seq2SeqLMOutput]:
+        if cls_mode:
+            encoder_last_hidden_states = self.get_encoder()(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
+
+            pooled_output = self.pooler(encoder_last_hidden_states)
+            pooled_output = self.dropout(pooled_output)
+            logits = self.classifier(pooled_output)
+
+            loss = None
+            if labels is not None:
+                loss_fct = CrossEntropyLoss()
+                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+
+            return SequenceClassifierOutput(
+                loss=loss, logits=logits
+            )
+        else:
+            return super().forward(
+                input_ids,
+                attention_mask,
+                decoder_input_ids,
+                decoder_attention_mask,
+                head_mask,
+                decoder_head_mask,
+                cross_attn_head_mask,
+                encoder_outputs,
+                past_key_values,
+                inputs_embeds,
+                decoder_inputs_embeds,
+                labels,
+                use_cache,
+                output_attentions,
+                output_hidden_states,
+                return_dict
+            )
+
+
 @add_start_docstrings(
     "The BART Model with a language modeling head. Can be used for summarization.", BART_START_DOCSTRING
 )
@@ -2001,7 +2086,43 @@ class ContrastiveBartForConditionalGenerationWithRouge1Rouge2(BartPretrainedMode
             masked_ext_rouge2_loss = ext_rouge2_loss_fct(ext_rouge2_logits.view(-1), ext_rouge2_labels.view(-1)).view(ext_rouge2_logits.shape[0], ext_rouge2_logits.shape[1]) * padding_mask
             masked_ext_rouge2_loss = torch.sum(masked_ext_rouge2_loss) / torch.sum(padding_mask)
 
-        # print(masked_lm_loss, masked_ext_rouge1_loss, masked_ext_rouge2_loss)
+        contrastive_loss_fct = ContrastiveLoss()
+
+        batch_positive_positive_1_gram_contrastive_loss = []
+        for sent_i in range(outputs.encoder_last_hidden_state.shape[0]):
+            single_sentence_1_grams = outputs.encoder_last_hidden_state[sent_i]
+            positive_1_gram = single_sentence_1_grams[ext_rouge1_labels[sent_i] > 0]
+            negative_1_gram = single_sentence_1_grams[ext_rouge1_labels[sent_i] == 0]
+            positive_positive_1_gram_pairs_index = []
+            for i in range(positive_1_gram.shape[0]):
+                for j in range(i + 1, positive_1_gram.shape[0]):
+                    positive_positive_1_gram_pairs_index.append((i, j))
+            positive_positive_1_gram_left_index, positive_positive_1_gram_right_index = list(zip(*positive_positive_1_gram_pairs_index))
+            # print(ext_rouge1_labels[sent_i] != 0)
+            # print(positive_1_gram.shape)
+            # print(len(positive_positive_1_gram_left_index))
+            positive_positive_1_gram_contrastive_loss = contrastive_loss_fct(positive_1_gram[positive_positive_1_gram_left_index], positive_1_gram[positive_positive_1_gram_right_index], torch.zeros(len(positive_positive_1_gram_pairs_index)))
+            batch_positive_positive_1_gram_contrastive_loss.append(positive_positive_1_gram_contrastive_loss)
+        batch_positive_positive_1_gram_contrastive_loss_sum = torch.sum(torch.stack(batch_positive_positive_1_gram_contrastive_loss))
+
+        # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+        # 1-gram 和 2-gram 数量都太大了，一句话 1024 个 token 就有 1024 * 1023 / 2 个正负例样本对，在一个 batch 上是不可承受的
+        # positive_positive_1_gram_pairs_index = []
+        # for i in range(positive_1_gram.shape[0]):
+        #     for j in range(i + 1, positive_1_gram.shape[0]):
+        #         positive_positive_1_gram_pairs_index.append((i, j))
+        # positive_positive_1_gram_left_index, positive_positive_1_gram_right_index = list(zip(*positive_positive_1_gram_pairs_index))
+        # positive_positive_1_gram_contrastive_loss = contrastive_loss_fct(positive_1_gram[positive_positive_1_gram_left_index], positive_1_gram[positive_positive_1_gram_right_index], torch.ones(len(positive_positive_1_gram_pairs_index)))
+        #
+        # positive_negative_1_gram_pairs_index = []
+        # for i in range(positive_1_gram.shape[0]):
+        #     for j in range(negative_1_gram.shape[0]):
+        #         positive_negative_1_gram_pairs_index.append((i, j))
+        # positive_negative_1_gram_left_index, positive_negative_1_gram_right_index = list(zip(*positive_negative_1_gram_pairs_index))
+        # positive_negative_1_gram_contrastive_loss = contrastive_loss_fct(positive_1_gram[positive_negative_1_gram_left_index], negative_1_gram[positive_negative_1_gram_right_index], torch.zeros(len(positive_positive_1_gram_pairs_index)))
+        # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+
 
         if not return_dict:
             output = (lm_logits,) + outputs[1:]
@@ -2018,7 +2139,8 @@ class ContrastiveBartForConditionalGenerationWithRouge1Rouge2(BartPretrainedMode
             encoder_hidden_states=outputs.encoder_hidden_states,
             encoder_attentions=outputs.encoder_attentions,
             masked_ext_rouge1_loss=masked_ext_rouge1_loss,
-            masked_ext_rouge2_loss=masked_ext_rouge2_loss
+            masked_ext_rouge2_loss=masked_ext_rouge2_loss,
+            positive_positive_1_gram_contrastive_loss=batch_positive_positive_1_gram_contrastive_loss_sum
         )
 
     def prepare_inputs_for_generation(
