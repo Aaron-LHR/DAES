@@ -1648,7 +1648,7 @@ def main():
                                         article_with_importance = [sents[0]]
                                         for i, sent in enumerate(sents[1:]):
                                             if prediction[i] == 1:
-                                                sent = f'[ {sent} ]'
+                                                sent = f'{tokenizer.mask_token} {sent}'
                                             article_with_importance.append(sent)
                                         article = ' '.join(article_with_importance)
                                         train_generate_list.append({'article': article, 'highlights': highlight})
@@ -1865,7 +1865,7 @@ def main():
                             importance_flag = False
                             for i, sent in enumerate(sents[1:]):
                                 if prediction[i] == 1:
-                                    sent = f'[ {sent} ]'
+                                    sent = f'{tokenizer.mask_token} {sent}'
                                 article_with_importance.append(sent)
                             article = ' '.join(article_with_importance)
                             test_generate_list.append({'article': article, 'highlights': highlight})
