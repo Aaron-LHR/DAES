@@ -288,6 +288,12 @@ def parse_args():
         default=5e-5,
         help="Initial learning rate (after the potential warmup period) to use.",
     )
+    parser.add_argument(
+        "--cls_step1_threhold",
+        type=float,
+        default=0.8,
+        help="Cls step1 threhold.",
+    )
     parser.add_argument("--weight_decay", type=float, default=0.0, help="Weight decay to use.")
     parser.add_argument("--num_train_epochs", type=int, default=3, help="Total number of training epochs to perform.")
     parser.add_argument(
@@ -543,6 +549,7 @@ def main():
             attr_value = getattr(cls_config, attr_name)
             accelerator.print(f"set attr '{attr_name}': '{attr_value}' to config")
             setattr(config, attr_name, attr_value)
+            setattr(config, 'pooler_hidden_size', getattr(config, 'd_model'))
 
     accelerator.print(config)
 
@@ -1443,7 +1450,7 @@ def main():
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
     # Afterwards we recalculate our number of training epochs
     args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
-    if args.test:
+    if args.test or args.generate_mode:
         args.num_train_epochs = 1
 
     # Figure out how many steps we should save the Accelerator states
@@ -1609,7 +1616,9 @@ def main():
                             with torch.no_grad():
                                 outputs = model(input_ids=batch['input_ids'], attention_mask=batch['attention_mask'],
                                                 labels=batch[cls_label_column], cls_mode=True)
-                                predictions = outputs.logits.argmax(dim=-1)
+                                # predictions = outputs.logits.argmax(dim=-1)
+                                predictions = (outputs.logits.softmax(dim=-1).view(-1, 2)[:, 1] >= args.cls_step1_threhold).long().view(
+                                    batch['input_ids'].shape[0], batch['input_ids'].shape[1], 1)
                                 references = batch[cls_label_column]
                                 if args.generate_mode:
                                     input_idss, labels = accelerator.gather((batch['input_ids'], batch['labels']))
@@ -1637,17 +1646,9 @@ def main():
                                         sents = tokenizer.decode(input_ids[1:-1]).split(tokenizer.mask_token)
                                         highlight = tokenizer.decode(label, skip_special_tokens=True)
                                         article_with_importance = [sents[0]]
-                                        importance_flag = False
                                         for i, sent in enumerate(sents[1:]):
                                             if prediction[i] == 1:
-                                                if importance_flag:
-                                                    article_with_importance[i] = article_with_importance[i][:-2]
-                                                else:
-                                                    sent = f'[ {sent}'
-                                                sent = f'{sent} ]'
-                                                importance_flag = True
-                                            else:
-                                                importance_flag = False
+                                                sent = f'[ {sent} ]'
                                             article_with_importance.append(sent)
                                         article = ' '.join(article_with_importance)
                                         train_generate_list.append({'article': article, 'highlights': highlight})
@@ -1828,7 +1829,8 @@ def main():
 
                 if args.encoder_prompt == "multi_cls_step1":
                     outputs = model(input_ids=batch['input_ids'], attention_mask=batch['attention_mask'], labels=batch[cls_label_column], cls_mode=True)
-                    predictions = outputs.logits.argmax(dim=-1)
+                    # predictions = outputs.logits.argmax(dim=-1)
+                    predictions = (outputs.logits.softmax(dim=-1).view(-1, 2)[:, 1] >= args.cls_step1_threhold).long().view(batch['input_ids'].shape[0], batch['input_ids'].shape[1], 1)
                     references = batch[cls_label_column]
                     if args.generate_mode:
                         input_idss, labels = accelerator.gather((batch['input_ids'], batch['labels']))
@@ -1863,14 +1865,7 @@ def main():
                             importance_flag = False
                             for i, sent in enumerate(sents[1:]):
                                 if prediction[i] == 1:
-                                    if importance_flag:
-                                        article_with_importance[i] = article_with_importance[i][:-2]
-                                    else:
-                                        sent = f'[ {sent}'
-                                    sent = f'{sent} ]'
-                                    importance_flag = True
-                                else:
-                                    importance_flag = False
+                                    sent = f'[ {sent} ]'
                                 article_with_importance.append(sent)
                             article = ' '.join(article_with_importance)
                             test_generate_list.append({'article': article, 'highlights': highlight})
@@ -2077,23 +2072,27 @@ def main():
         logger.info(result)
 
         if args.with_tracking:
-            if not args.test and args.encoder_prompt != "multi_cls_step1":
-                result["train_loss"] = total_loss.item() / len(train_dataloader)  # 生成式loss
-            if args.encoder_prompt == "multi_cls_step1":
-                result["total_cls_loss"] = total_cls_loss.item() / len(train_dataloader)
-            if args.encoder_prompt == "contrastive_kmeans":
-                result["total_contrastive_loss"] = total_contrastive_loss.item() / len(train_dataloader)
-            if args.encoder_prompt == "mask_rouge" or args.encoder_prompt == "mask_rouge_lightweight":
-                result["total_mask_loss"] = total_mask_loss.item() / len(train_dataloader)
-            result["epoch"] = epoch
-            result["step"] = completed_steps
-            if args.model_type == "BartForConditionalGenerationWithRouge1":
-                result["total_ext_rouge1_loss"] = total_ext_rouge1_loss.item() / len(train_dataloader)  # rouge 1 loss
-                result["loss_sum"] = result["train_loss"] + result["total_ext_rouge1_loss"]  # 生成式 + rouge 1 loss
-            if args.model_type == "BartForConditionalGenerationWithRouge1Rouge2":
-                result["total_ext_rouge1_loss"] = total_ext_rouge1_loss.item() / len(train_dataloader)  # rouge 1 loss
-                result["total_ext_rouge2_loss"] = total_ext_rouge2_loss.item() / len(train_dataloader)  # rouge 2 loss
-                result["loss_sum"] = result["train_loss"] + result["total_ext_rouge1_loss"] + result["total_ext_rouge2_loss"]  # 生成式 + rouge 1 loss + rouge 2 loss
+            if not args.test:
+                if args.encoder_prompt != "multi_cls_step1":
+                    result["train_loss"] = total_loss.item() / len(train_dataloader)  # 生成式loss
+                if args.encoder_prompt == "multi_cls_step1":
+                    result["total_cls_loss"] = total_cls_loss.item() / len(train_dataloader)
+                if args.encoder_prompt == "contrastive_kmeans":
+                    result["total_contrastive_loss"] = total_contrastive_loss.item() / len(train_dataloader)
+                if args.encoder_prompt == "mask_rouge" or args.encoder_prompt == "mask_rouge_lightweight":
+                    result["total_mask_loss"] = total_mask_loss.item() / len(train_dataloader)
+                result["epoch"] = epoch
+                result["step"] = completed_steps
+                if args.model_type == "BartForConditionalGenerationWithRouge1":
+                    result["total_ext_rouge1_loss"] = total_ext_rouge1_loss.item() / len(train_dataloader)  # rouge 1 loss
+                    result["loss_sum"] = result["train_loss"] + result["total_ext_rouge1_loss"]  # 生成式 + rouge 1 loss
+                if args.model_type == "BartForConditionalGenerationWithRouge1Rouge2":
+                    result["total_ext_rouge1_loss"] = total_ext_rouge1_loss.item() / len(train_dataloader)  # rouge 1 loss
+                    result["total_ext_rouge2_loss"] = total_ext_rouge2_loss.item() / len(train_dataloader)  # rouge 2 loss
+                    result["loss_sum"] = result["train_loss"] + result["total_ext_rouge1_loss"] + result["total_ext_rouge2_loss"]  # 生成式 + rouge 1 loss + rouge 2 loss
+            else:
+                accelerator.log(result, step=1)
+                accelerator.log(result, step=40000)
             accelerator.log(result, step=completed_steps)
 
         if args.push_to_hub and epoch < args.num_train_epochs - 1 and not args.test:
