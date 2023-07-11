@@ -2107,13 +2107,13 @@ def main():
                     commit_message=f"Training in progress epoch {epoch}", blocking=False, auto_lfs_prune=True
                 )
 
-        if args.checkpointing_steps == "epoch" and not args.test:
+        if args.checkpointing_steps == "epoch" and not args.test and not args.generate_mode:
             output_dir = f"epoch_{epoch}"
             if args.output_dir is not None:
                 output_dir = os.path.join(args.output_dir, output_dir)
             accelerator.save_state(output_dir)
 
-    if args.output_dir is not None and not args.test:
+    if args.output_dir is not None and not args.test and not args.generate_mode:
         accelerator.wait_for_everyone()
         unwrapped_model = accelerator.unwrap_model(model)
         unwrapped_model.save_pretrained(
